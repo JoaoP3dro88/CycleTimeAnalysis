@@ -1,7 +1,19 @@
+/*
+  Viewport-driven scaling
+  - We keep the app locked to the viewport (no page scroll).
+  - We scale typography/spacing down on small screens so content fits.
+*/
 :root {
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
+  line-height: 1.35;
   font-weight: 400;
+
+  /* Global scale knobs (used by components via rem). */
+  font-size: clamp(12px, 0.85vw + 0.55rem, 16px);
+
+  /* Common spacing tokens */
+  --cta-gap: clamp(0.45rem, 1.2vh, 0.9rem);
+  --cta-pad: clamp(0.45rem, 1.3vh, 0.9rem);
 
   color-scheme: light dark;
   color: rgba(255, 255, 255, 0.87);
@@ -11,6 +23,13 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Notebook / split-screen tuning: slightly smaller overall UI on constrained viewports */
+@media (max-width: 70rem), (max-height: 44rem) {
+  :root {
+    font-size: clamp(11px, 0.75vw + 0.5rem, 15px);
+  }
 }
 
 a {
@@ -24,19 +43,24 @@ a:hover {
 
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
+  /* App-like layout: fill the window, no centering */
+  min-width: 20rem;
   min-height: 100vh;
+  overflow: hidden;
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+/* Allow the app shell to be vh-driven and scroll internally when needed */
+html,
+body,
+#root {
+  height: 100vh;
+  width: 100vw;
 }
+
+/* Don't force giant headings globally (we control sizes per-component). */
 
 button {
-  border-radius: 8px;
+  border-radius: 0.5rem;
   border: 1px solid transparent;
   padding: 0.6em 1.2em;
   font-size: 1em;
