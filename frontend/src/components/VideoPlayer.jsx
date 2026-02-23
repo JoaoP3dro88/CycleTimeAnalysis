@@ -434,22 +434,48 @@ const VideoPlayer = forwardRef(function VideoPlayer(
             />
           </label>
 
+          <label className="badge" style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={!!loopRange?.active}
+              onChange={(e) => {
+                const checked = e.currentTarget.checked
+                if (checked) {
+                  // If there's no configured range yet, create a small default range.
+                  const hasRange =
+                    Number.isFinite(loopRange?.startFrame) &&
+                    Number.isFinite(loopRange?.endFrame) &&
+                    loopRange.endFrame > loopRange.startFrame
+
+                  if (hasRange) {
+                    onLoopRangeChange?.({ ...loopRange, active: true })
+                  } else {
+                    const start = Math.max(0, currentFrame)
+                    const end = Math.min(totalFrames - 1, currentFrame + Math.floor(fps))
+                    onLoopRangeChange?.({ active: true, startFrame: start, endFrame: Math.max(end, start + 1) })
+                  }
+                } else {
+                  onLoopRangeChange?.({ ...(loopRange ?? { startFrame: 0, endFrame: 0 }), active: false })
+                }
+              }}
+              disabled={!isReady}
+            />
+            Loop
+          </label>
+
           <button
             className="btn"
             onClick={() => {
-              if (!loopRange?.active) {
-                // activate with a tiny default range around the current frame
-                const start = Math.max(0, currentFrame)
-                const end = Math.min(totalFrames - 1, currentFrame + Math.floor(fps))
-                onLoopRangeChange?.({ active: true, startFrame: start, endFrame: Math.max(end, start + 1) })
-                seekToFrame(start)
-              } else {
-                onLoopRangeChange?.({ active: false, startFrame: 0, endFrame: 0 })
-              }
+              // Set / refresh loop window around current frame (does not implicitly toggle off).
+              const start = Math.max(0, currentFrame)
+              const end = Math.min(totalFrames - 1, currentFrame + Math.floor(fps))
+              onLoopRangeChange?.({ active: true, startFrame: start, endFrame: Math.max(end, start + 1) })
+              seekToFrame(start)
             }}
             disabled={!isReady}
+            title="Define o loop em torno do frame atual"
           >
-            {loopRange?.active ? 'Desativar loop' : 'Ativar loop'}
+            Definir loop
           </button>
 
           {loopRange?.active ? (

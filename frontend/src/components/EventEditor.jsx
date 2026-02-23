@@ -305,11 +305,13 @@ export default function EventEditor({
                 </td>
                 <td style={{ ...tdStyle, textAlign: 'center' }}>
                   <input
-                    type="radio"
-                    name="loop"
+                    type="checkbox"
                     checked={loopIndex === idx}
-                    onChange={() => onLoopIndexChange?.(idx)}
-                    title="Ativar loop neste evento"
+                    onChange={(ev) => {
+                      const checked = ev.currentTarget.checked
+                      onLoopIndexChange?.(checked ? idx : -1)
+                    }}
+                    title={loopIndex === idx ? 'Desativar loop deste evento' : 'Ativar loop neste evento'}
                   />
                 </td>
               </tr>
