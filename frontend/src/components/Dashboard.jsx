@@ -49,7 +49,8 @@ const PLOTLY_CONFIG = { responsive: true, displayModeBar: true, scrollZoom: fals
 // ─── Data preparation ────────────────────────────────────────────────────────
 
 function prepareData(events) {
-  return events.map((ev) => ({
+  return events.map((ev, i) => ({
+    _idx:        i,              // numeric sequential index — used as Gantt Y axis
     Nome:        String(ev.operation ?? ev.resource ?? 'ROI'),
     start_frame: Number(ev.start_frame ?? 0),
     end_frame:   Number(ev.end_frame   ?? 0),
@@ -120,7 +121,7 @@ function buildHands(df) {
     labels: Object.keys(pieAgg),
     values: Object.values(pieAgg).map((v) => +v.toFixed(3)),
     name: 'Balanceamento',
-    marker: { colors: ['#1f77b4', '#d62728'] },
+    marker: { colors: Object.keys(pieAgg).map((m) => m === 'Esq' ? '#1f77b4' : '#d62728') },
     domain: { x: [0, 0.42] },
     title: { text: 'Balanceamento<br>Esq vs Dir', position: 'bottom center' },
     textinfo: 'label+percent',
@@ -159,11 +160,12 @@ function buildGanttTracesFromRows(rows) {
   const cats   = [...new Set(sorted.map((r) => r.Categoria))]
   const traces = []
 
+  // Use numeric y_position (index) + ticktext labels — identical to legacy gen_gantt().
+  // This prevents Plotly from collapsing multiple events with the same label into one row.
   for (const cat of cats) {
     const catRows = sorted.filter((r) => r.Categoria === cat)
     let isFirst = true
     for (const row of catRows) {
-      const yLabel = `${row.Mao} — ${row.Nome}`
       traces.push({
         type: 'bar',
         orientation: 'h',
@@ -171,7 +173,7 @@ function buildGanttTracesFromRows(rows) {
         legendgroup: cat,
         showlegend: isFirst,
         x: [row.end_frame - row.start_frame],
-        y: [yLabel],
+        y: [row._idx],           // numeric position — no label collision
         base: [row.start_frame],
         marker: { color: COLOR_MAP[cat] ?? '#aaa', opacity: 0.85 },
         text: [`${row.Nome} (${row.Duracao_s.toFixed(1)}s)`],
@@ -189,12 +191,13 @@ function buildGanttTracesFromRows(rows) {
     }
   }
 
-  const yLabels = [...new Set(sorted.map((r) => `${r.Mao} — ${r.Nome}`))]
-  return { traces, yLabels, height: Math.max(400, yLabels.length * 36 + 120) }
+  const tickvals = sorted.map((r) => r._idx)
+  const ticktext = sorted.map((r) => `${r.Mao} — ${r.Nome}`)
+  return { traces, tickvals, ticktext, height: Math.max(400, sorted.length * 30 + 120) }
 }
 
 function buildGantt(df, title) {
-  const { traces, yLabels, height } = buildGanttTracesFromRows(df)
+  const { traces, tickvals, ticktext, height } = buildGanttTracesFromRows(df)
   return {
     traces,
     layout: {
@@ -206,8 +209,8 @@ function buildGantt(df, title) {
       yaxis: {
         autorange: 'reversed',
         tickmode: 'array',
-        tickvals: yLabels,
-        ticktext: yLabels,
+        tickvals,            // numeric positions (0,1,2...)
+        ticktext,            // string labels ("Esq — Mesa", ...)
         automargin: true,
       },
       legend: { orientation: 'h', y: -0.1 },

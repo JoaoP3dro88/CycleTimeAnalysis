@@ -356,7 +356,7 @@ function NameDialog({ defaultName, onConfirm, onCancel }) {
           </label>
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', fontSize: '0.82rem', color: '#aaa' }}>
-            🤚 Mão Direita
+            ✋ Mão Direita
             <select value={rightCat} onChange={(e) => setRightCat(e.target.value)} style={selectStyle}>
               {CATEGORIES.map((c) => (
                 <option key={c} value={c} style={{ color: CAT_COLORS[c] }}>
