@@ -46,6 +46,9 @@ export default function VideoAnalyzer({ videoRef, src, fps = 30, onCreateEvent }
   const rafRef = useRef(null)
   const trackerRef = useRef(new RoiTracker())
   const loadingRef = useRef(false)
+  // Highest end_frame already emitted per hand — prevents duplicate events
+  // when the user seeks backward and reprocesses an already-seen range.
+  const maxEndFrameRef = useRef({ Left: -1, Right: -1 })
 
   const [modelReady, setModelReady] = useState(false)
   const [modelError, setModelError] = useState(null)
@@ -229,9 +232,16 @@ export default function VideoAnalyzer({ videoRef, src, fps = 30, onCreateEvent }
 
           const endFrame = Math.round(video.currentTime * currentFps)
           const startFrame = Math.max(0, endFrame - Math.round(ev.duration * currentFps))
+
+          // Skip if this hand already emitted an event that ends at or after
+          // this start_frame — means we've rewound and would create a duplicate.
+          if (startFrame <= maxEndFrameRef.current[ev.hand]) continue
+
           const category = ev.hand === 'Left'
             ? (roi.leftCategory ?? '')
             : (roi.rightCategory ?? '')
+
+          maxEndFrameRef.current[ev.hand] = endFrame
 
           onCreateEventRef.current?.({
             operation: roi.name,
@@ -277,6 +287,7 @@ export default function VideoAnalyzer({ videoRef, src, fps = 30, onCreateEvent }
   useEffect(() => {
     setActive(false)
     trackerRef.current.reset()
+    maxEndFrameRef.current = { Left: -1, Right: -1 }
   }, [src])
 
   const handleRoisChange = useCallback((nextRois) => {
