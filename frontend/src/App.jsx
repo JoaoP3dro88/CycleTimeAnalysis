@@ -5,6 +5,7 @@ import EventEditor from './components/EventEditor'
 import VideoPlayer, { VideoCanvas } from './components/VideoPlayer'
 import CameraView from './components/CameraView'
 import VideoAnalyzer from './components/VideoAnalyzer'
+import Dashboard from './components/Dashboard'
 import { apiGet, apiPost } from './lib/api'
 
 function App() {
@@ -20,6 +21,7 @@ function App() {
   const [loopRange, setLoopRange] = useState({ active: false, startFrame: 0, endFrame: 0 })
   const [cameraMode, setCameraMode] = useState(false)
   const [videoSrc, setVideoSrc] = useState('')
+  const [activeTab, setActiveTab] = useState('editor')  // 'editor' | 'dashboard'
 
   const fps = useMemo(() => project?.meta?.fps ?? 30, [project])
 
@@ -185,6 +187,7 @@ function App() {
           >
             {cameraMode ? '📷 Fechar câmera' : '📷 Câmera'}
           </button>
+
           <input
             ref={filePickerRef}
             type="file"
@@ -250,6 +253,21 @@ function App() {
           >
             Resetar
           </button>
+
+          <button
+            onClick={() => setActiveTab((t) => (t === 'dashboard' ? 'editor' : 'dashboard'))}
+            style={{
+              padding: '0.6rem 0.75rem',
+              borderRadius: '0.65rem',
+              border: activeTab === 'dashboard' ? '1px solid #2a4a1a' : '1px solid #2a2a2a',
+              background: activeTab === 'dashboard' ? '#172910' : '#111',
+              cursor: 'pointer',
+              fontWeight: activeTab === 'dashboard' ? 600 : 400,
+            }}
+            title="Abrir painel de análises"
+          >
+            📊 Dashboard
+          </button>
         </div>
       </header>
 
@@ -270,11 +288,29 @@ function App() {
       ) : null}
 
       {/* Main work area: locked to viewport; we scale down on small screens instead of page scroll. */}
-      <main style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+      <main style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        {/* ── DASHBOARD TAB ── */}
+        {activeTab === 'dashboard' && (
+          <div style={{ flex: 1, minHeight: 0, padding: 'var(--cta-pad)', display: 'flex', flexDirection: 'column' }}>
+            <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem' }}>📊 Dashboard de Análises</h2>
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <Dashboard
+                events={project?.events ?? []}
+                taktTime={project?.meta?.takt_time ?? 0}
+                fps={fps}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* ── EDITOR TAB ── */}
+        {activeTab === 'editor' && (
         <section
           className="cta-app-panels"
           style={{
-            minHeight: '100%',
+            flex: 1,
+            minHeight: 0,
+            minWidth: 0,
             display: 'grid',
             gridTemplateColumns: 'minmax(0, 1.25fr) minmax(0, 0.75fr)',
             gap: 'var(--cta-gap)',
@@ -403,38 +439,38 @@ function App() {
                     }}
                   />
                 ) : (
-                  <div style={{ position: 'relative', width: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                    {/* Video fills all available space */}
-                    <VideoCanvas
-                      videoRef={videoStateRef.current.videoRef}
-                      src={videoStateRef.current.src}
-                      maxHeight={'100%'}
-                    />
-                    {/* Analyzer overlays sit on top of the video, absolutely positioned */}
-                    {videoSrc && (
-                      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-                        <VideoAnalyzer
-                          videoRef={videoStateRef.current.videoRef}
-                          src={videoSrc}
-                          fps={fps}
-                          onCreateEvent={(newEvent) => {
-                            const currentProject = project ?? {
-                              meta: { fps, total_frames: 0, takt_time: 10 },
-                              events: [],
-                            }
-                            const nextProject = {
-                              ...currentProject,
-                              events: [...(currentProject.events ?? []), newEvent],
-                            }
-                            setBusy(true)
-                            saveProject(nextProject)
-                              .catch((e) => setError(e.message ?? String(e)))
-                              .finally(() => setBusy(false))
-                          }}
-                        />
-                      </div>
-                    )}
-                  </div>
+                <div style={{ position: 'relative', width: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                  {/* Video fills all available space */}
+                  <VideoCanvas
+                    videoRef={videoStateRef.current.videoRef}
+                    src={videoStateRef.current.src}
+                    maxHeight={'100%'}
+                  />
+                  {/* Analyzer overlays sit on top of the video, absolutely positioned */}
+                  {videoSrc && (
+                    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+                      <VideoAnalyzer
+                        videoRef={videoStateRef.current.videoRef}
+                        src={videoSrc}
+                        fps={fps}
+                        onCreateEvent={(newEvent) => {
+                          const currentProject = project ?? {
+                            meta: { fps, total_frames: 0, takt_time: 10 },
+                            events: [],
+                          }
+                          const nextProject = {
+                            ...currentProject,
+                            events: [...(currentProject.events ?? []), newEvent],
+                          }
+                          setBusy(true)
+                          saveProject(nextProject)
+                            .catch((e) => setError(e.message ?? String(e)))
+                            .finally(() => setBusy(false))
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
                 )}
               </div>
             </div>
@@ -527,6 +563,7 @@ function App() {
             </div>
           </div>
         </section>
+        )}
 
         {/* Responsive (no JS): when the viewport gets narrow, stack panels. */}
         <style>{`

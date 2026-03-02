@@ -273,7 +273,7 @@ function NameDialog({ defaultName, onConfirm, onCancel }) {
 
   const CATEGORIES = ['TAV', 'NNVA', 'TNAV', '']
   const CAT_LABELS = { TAV: 'TAV', NNVA: 'NNVA', TNAV: 'TNAV', '': 'Nenhuma' }
-  const CAT_COLORS = { TAV: '#2ca02c', NNVA: '#ff7f0e', TNAV: '#d62728', '': '#666' }
+  const CAT_COLORS = { TAV: '#2ca02c', NNVA: '#d62728', TNAV: '#ff7f0e', '': '#666' }
 
   function handleKey(e) {
     if (e.key === 'Enter') handleConfirm()

@@ -19,7 +19,7 @@ import { HandLandmarker, FilesetResolver, DrawingUtils } from '@mediapipe/tasks-
 import RoiOverlay from './RoiOverlay'
 import { RoiTracker, detectRoi } from '../lib/roiTracker'
 
-const ROI_COLORS = ['#00ff00', '#ff00ff', '#00ffff', '#ffff00', '#ff4444', '#ff8800']
+const ROI_COLORS = ['#00ff00', '#ff00ff', '#00ffff', '#ffff00', '#ff4444', '#ff8800', '#016d1cff', '#4631ffff', '#ff4bc3ff']
 
 // ── Geometric filter (same as CameraView) ───────────────────────────────────
 function isValidHand(landmarks) {

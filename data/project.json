@@ -5,6 +5,250 @@
     "total_frames": 0,
     "takt_time": 10.0
   },
-  "events": [],
-  "timestamp": "2026-03-02T13:13:51.260005"
+  "events": [
+    {
+      "operation": "Medição Manual",
+      "start_frame": 5,
+      "end_frame": 10,
+      "duration": 0.156349,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Alimentação Máq.",
+      "start_frame": 13,
+      "end_frame": 28,
+      "duration": 0.499973,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "Alimentação Máq."
+    },
+    {
+      "operation": "Medição Manual",
+      "start_frame": 31,
+      "end_frame": 116,
+      "duration": 2.849436,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Alimentação Máq.",
+      "start_frame": 119,
+      "end_frame": 132,
+      "duration": 0.430668,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "Alimentação Máq."
+    },
+    {
+      "operation": "Medição Manual",
+      "start_frame": 135,
+      "end_frame": 148,
+      "duration": 0.425923,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Medição Manual",
+      "start_frame": 146,
+      "end_frame": 814,
+      "duration": 22.260962,
+      "category": "TNAV",
+      "object": "Mão Esquerda",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Medição Manual",
+      "start_frame": 200,
+      "end_frame": 930,
+      "duration": 24.342384,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Alimentação Máq.",
+      "start_frame": 933,
+      "end_frame": 948,
+      "duration": 0.491817,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "Alimentação Máq."
+    },
+    {
+      "operation": "Medição Manual",
+      "start_frame": 830,
+      "end_frame": 1097,
+      "duration": 8.904678,
+      "category": "TNAV",
+      "object": "Mão Esquerda",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Medição Manual",
+      "start_frame": 953,
+      "end_frame": 1123,
+      "duration": 5.678012,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Alimentação Máq.",
+      "start_frame": 1127,
+      "end_frame": 1139,
+      "duration": 0.412583,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "Alimentação Máq."
+    },
+    {
+      "operation": "Alimentação Máq.",
+      "start_frame": 1125,
+      "end_frame": 1148,
+      "duration": 0.753444,
+      "category": "TAV",
+      "object": "Mão Esquerda",
+      "resource": "Alimentação Máq."
+    },
+    {
+      "operation": "Medição Manual",
+      "start_frame": 1153,
+      "end_frame": 1617,
+      "duration": 15.457381,
+      "category": "TNAV",
+      "object": "Mão Esquerda",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Medição Manual",
+      "start_frame": 1161,
+      "end_frame": 1859,
+      "duration": 23.275399,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Alimentação Máq.",
+      "start_frame": 1862,
+      "end_frame": 1882,
+      "duration": 0.668532,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "Alimentação Máq."
+    },
+    {
+      "operation": "Medição Manual",
+      "start_frame": 1886,
+      "end_frame": 2041,
+      "duration": 5.177209,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Alimentação Máq.",
+      "start_frame": 2045,
+      "end_frame": 2057,
+      "duration": 0.40841,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "Alimentação Máq."
+    },
+    {
+      "operation": "Alimentação Máq.",
+      "start_frame": 2044,
+      "end_frame": 2071,
+      "duration": 0.892147,
+      "category": "TAV",
+      "object": "Mão Esquerda",
+      "resource": "Alimentação Máq."
+    },
+    {
+      "operation": "Medição Manual",
+      "start_frame": 2080,
+      "end_frame": 2382,
+      "duration": 10.050319,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Medição Manual",
+      "start_frame": 2411,
+      "end_frame": 2714,
+      "duration": 10.097928,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Alimentação Máq.",
+      "start_frame": 2834,
+      "end_frame": 2847,
+      "duration": 0.418076,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "Alimentação Máq."
+    },
+    {
+      "operation": "Medição Manual",
+      "start_frame": 2855,
+      "end_frame": 2928,
+      "duration": 2.443254,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Alimentação Máq.",
+      "start_frame": 2933,
+      "end_frame": 2947,
+      "duration": 0.45927,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "Alimentação Máq."
+    },
+    {
+      "operation": "Medição Manual",
+      "start_frame": 2952,
+      "end_frame": 2966,
+      "duration": 0.481899,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Medição Manual",
+      "start_frame": 3000,
+      "end_frame": 3221,
+      "duration": 7.36508,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Medição Manual",
+      "start_frame": 3693,
+      "end_frame": 3700,
+      "duration": 0.237289,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medição Manual"
+    },
+    {
+      "operation": "Alimentação Máq.",
+      "start_frame": 3703,
+      "end_frame": 3718,
+      "duration": 0.484387,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "Alimentação Máq."
+    }
+  ],
+  "timestamp": "2026-03-02T15:58:47.695983"
 }
