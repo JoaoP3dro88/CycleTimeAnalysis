@@ -3,6 +3,8 @@ import './App.css'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import EventEditor from './components/EventEditor'
 import VideoPlayer, { VideoCanvas } from './components/VideoPlayer'
+import CameraView from './components/CameraView'
+import VideoAnalyzer from './components/VideoAnalyzer'
 import { apiGet, apiPost } from './lib/api'
 
 function App() {
@@ -16,6 +18,8 @@ function App() {
   const [pendingStartFrame, setPendingStartFrame] = useState(null)
   const [loopIndex, setLoopIndex] = useState(-1)
   const [loopRange, setLoopRange] = useState({ active: false, startFrame: 0, endFrame: 0 })
+  const [cameraMode, setCameraMode] = useState(false)
+  const [videoSrc, setVideoSrc] = useState('')
 
   const fps = useMemo(() => project?.meta?.fps ?? 30, [project])
 
@@ -167,6 +171,20 @@ function App() {
           >
             Carregar vídeo
           </button>
+
+          <button
+            onClick={() => setCameraMode((v) => !v)}
+            style={{
+              padding: '0.6rem 0.75rem',
+              borderRadius: '0.65rem',
+              border: cameraMode ? '1px solid #1a4a1a' : '1px solid #2a2a2a',
+              background: cameraMode ? '#0d2e0d' : '#111',
+              cursor: 'pointer',
+            }}
+            title={cameraMode ? 'Fechar câmera' : 'Abrir câmera com rastreamento de mãos'}
+          >
+            {cameraMode ? '📷 Fechar câmera' : '📷 Câmera'}
+          </button>
           <input
             ref={filePickerRef}
             type="file"
@@ -177,8 +195,8 @@ function App() {
               const url = URL.createObjectURL(file)
 
               // Update the shared player state that powers the canvas.
-              // This keeps the <video> element the same (via refs), only changing its src.
               videoStateRef.current.src = url
+              setVideoSrc(url)
               // Reset selection state inside VideoPlayer implicitly.
               setLoopRange({ active: false, startFrame: 0, endFrame: 0 })
               setPendingStartFrame(null)
@@ -350,7 +368,9 @@ function App() {
               justifyContent: 'flex-end',
             }}
           >
-            <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem' }}>Vídeo</h2>
+            <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem' }}>
+              {cameraMode ? 'Câmera ao vivo' : 'Vídeo'}
+            </h2>
             {/* Video area grows; tools keep natural height at the bottom. */}
             <div style={{ minHeight: 0, flex: 1, display: 'flex' }}>
               <div
@@ -364,11 +384,58 @@ function App() {
                   minHeight: 0,
                 }}
               >
-                <VideoCanvas
-                  videoRef={videoStateRef.current.videoRef}
-                  src={videoStateRef.current.src}
-                  maxHeight={'100%'}
-                />
+                {cameraMode ? (
+                  <CameraView
+                    fps={fps}
+                    onCreateEvent={(newEvent) => {
+                      const currentProject = project ?? {
+                        meta: { fps, total_frames: 0, takt_time: 10 },
+                        events: [],
+                      }
+                      const nextProject = {
+                        ...currentProject,
+                        events: [...(currentProject.events ?? []), newEvent],
+                      }
+                      setBusy(true)
+                      saveProject(nextProject)
+                        .catch((e) => setError(e.message ?? String(e)))
+                        .finally(() => setBusy(false))
+                    }}
+                  />
+                ) : (
+                  <div style={{ position: 'relative', width: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                    {/* Video fills all available space */}
+                    <VideoCanvas
+                      videoRef={videoStateRef.current.videoRef}
+                      src={videoStateRef.current.src}
+                      maxHeight={'100%'}
+                    />
+                    {/* Analyzer overlays sit on top of the video, absolutely positioned */}
+                    {videoSrc && (
+                      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+                        <VideoAnalyzer
+                          videoRef={videoStateRef.current.videoRef}
+                          src={videoSrc}
+                          fps={fps}
+                          onCreateEvent={(newEvent) => {
+                            const currentProject = project ?? {
+                              meta: { fps, total_frames: 0, takt_time: 10 },
+                              events: [],
+                            }
+                            const nextProject = {
+                              ...currentProject,
+                              events: [...(currentProject.events ?? []), newEvent],
+                            }
+                            setBusy(true)
+                            saveProject(nextProject)
+                              .catch((e) => setError(e.message ?? String(e)))
+                              .finally(() => setBusy(false))
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -392,13 +459,14 @@ function App() {
                   loopRange={loopRange}
                   onLoopRangeChange={(lr) => setLoopRange(lr)}
                   layout="controls"
-                  renderVideo={({ videoRef, src }) => {
+                  renderVideo={({ videoRef, src, isReady: vReady }) => {
                     // Critical: keep the VideoPlayer's internal <video> ref pointing to
                     // the same DOM element used by the canvas. Otherwise isReady never
                     // becomes true and all controls stay disabled.
                     videoStateRef.current.videoRef = videoRef
                     const nextSrc = videoStateRef.current.src || src
                     videoStateRef.current.src = nextSrc
+                    // Sync ready state for VideoAnalyzer (no-op: VideoAnalyzer self-detects readiness)
                     if (videoRef?.current && videoRef.current.src !== nextSrc) {
                       videoRef.current.src = nextSrc
                       // Critical on some browsers: setting .src directly doesn't always

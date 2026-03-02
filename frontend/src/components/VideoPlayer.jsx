@@ -8,7 +8,7 @@ export function VideoCanvas({ videoRef, src, maxHeight = '60vh' }) {
     <div style={{ marginTop: 0, height: '100%' }}>
       <video
         ref={videoRef}
-        src={src}
+        src={src || undefined}
         style={{ width: '100%', height: '100%', maxHeight, background: '#000', borderRadius: '0.65rem' }}
         controls
       />
