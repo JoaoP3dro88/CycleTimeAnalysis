@@ -6,14 +6,14 @@
  * via Plotly.react() — no iframe, no CDN, no COEP issues.
  *
  * Charts (matching ProcessTracer_Hands.py DashboardWidget):
- *   1. 📊 Resumo Executivo  — KPI cards + Yamazumi bar stacked
- *   2. 🤲 Análise de Mãos   — Pie Esq vs Dir + grouped bar
- *   3. 📅 Sequenciamento Geral — Gantt horizontal ambas as mãos
- *   4. ✋ Sequenciamento Mão Esquerda
- *   5. 🤚 Sequenciamento Mão Direita
- *   6. 🎯 Análise de Recursos — Sunburst Recurso → Categoria → Nome
- *   7. 💎 Análise de Valor    — Bar por Categoria (TAV/NNVA/TNAV)
- *   8. 🔥 Interações          — Heatmap ROI × Mão
+ *   1. Resumo Executivo  — KPI cards + Yamazumi bar stacked
+ *   2. Análise de Mãos   — Pie Esq vs Dir + grouped bar
+ *   3. Sequenciamento Geral — Gantt horizontal ambas as mãos
+ *   4. Sequenciamento Mão Esquerda
+ *   5. Sequenciamento Mão Direita
+ *   6. Análise de Recursos — Sunburst Recurso → Categoria → Nome
+ *   7. Análise de Valor    — Bar por Categoria (TAV/NNVA/TNAV)
+ *   8. Interações          — Heatmap ROI × Mão
  *
  * Props:
  *   events    {Array}  — project.events list
@@ -22,6 +22,11 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  LayoutDashboard, Hand, GanttChart, GanttChartSquare,
+  Network, TrendingUp, Grid3x3, FileDown, Loader,
+  ChartNoAxesColumn,
+} from 'lucide-react'
 import Plotly from 'plotly.js-dist-min'
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -34,14 +39,14 @@ const COLOR_MAP = {
 }
 
 const CHART_LIST = [
-  { id: 'summary',     label: '📊 Resumo Executivo (KPIs)' },
-  { id: 'hands',       label: '🤲 Análise Detalhada de Mãos' },
-  { id: 'gantt',       label: '📅 Sequenciamento Geral' },
-  { id: 'gantt_left',  label: '✋ Sequenciamento Mão Esquerda' },
-  { id: 'gantt_right', label: '🤚 Sequenciamento Mão Direita' },
-  { id: 'resources',   label: '🎯 Análise de Recursos (Sunburst)' },
-  { id: 'value',       label: '💎 Análise de Valor (TAV/Desperdício)' },
-  { id: 'heatmap',     label: '🔥 Interações (Heatmap Mão x ROI)' },
+  { id: 'summary',     label: 'Resumo Executivo (KPIs)',          Icon: LayoutDashboard },
+  { id: 'hands',       label: 'Análise Detalhada de Mãos',        Icon: Hand            },
+  { id: 'gantt',       label: 'Sequenciamento Geral',             Icon: GanttChart      },
+  { id: 'gantt_left',  label: 'Sequenciamento Mão Esquerda',      Icon: GanttChartSquare},
+  { id: 'gantt_right', label: 'Sequenciamento Mão Direita',       Icon: GanttChartSquare},
+  { id: 'resources',   label: 'Análise de Recursos (Sunburst)',   Icon: Network         },
+  { id: 'value',       label: 'Análise de Valor (TAV/Desperdício)', Icon: TrendingUp    },
+  { id: 'heatmap',     label: 'Interações (Heatmap Mão x ROI)',   Icon: Grid3x3         },
 ]
 
 const PLOTLY_CONFIG = { responsive: true, displayModeBar: true, scrollZoom: false }
@@ -352,28 +357,56 @@ function KpiBar({ df, taktTime }) {
 // ─── PlotPanel — renders a Plotly chart directly in a div ────────────────────
 
 function PlotPanel({ traces, layout }) {
-  const divRef = useRef(null)
+  const divRef       = useRef(null)
+  const containerRef = useRef(null)
 
   useEffect(() => {
     if (!divRef.current || !traces.length) return
+
+    // If the layout has an explicit height (e.g. Gantt charts sized by row count),
+    // honour it and let the container scroll.
+    // Otherwise fill the container height so the chart is never squashed.
+    const containerH = containerRef.current?.clientHeight ?? 0
+    const plotHeight  = layout.height ?? (containerH > 80 ? containerH : 500)
 
     const fullLayout = {
       paper_bgcolor: 'rgba(0,0,0,0)',
       plot_bgcolor:  'rgba(0,0,0,0)',
       font: { color: '#e0e0e0' },
       ...layout,
+      height: plotHeight,
     }
 
     Plotly.react(divRef.current, traces, fullLayout, PLOTLY_CONFIG)
 
     const ro = new ResizeObserver(() => {
-      if (divRef.current) Plotly.Plots.resize(divRef.current)
+      if (!divRef.current || !containerRef.current) return
+      // Gantt charts keep their explicit height; all others stretch to fill.
+      const h = layout.height ?? (containerRef.current.clientHeight || 500)
+      Plotly.relayout(divRef.current, { height: h }).catch(() => {})
     })
-    ro.observe(divRef.current)
+    ro.observe(containerRef.current)
     return () => ro.disconnect()
   }, [traces, layout])
 
-  return <div ref={divRef} style={{ width: '100%', minHeight: 380 }} />
+  // hasFixedHeight: Gantt charts pass an explicit pixel height — those scroll.
+  // All other charts stretch to fill the available space.
+  const hasFixedHeight = Boolean(layout.height)
+
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        width: '100%',
+        height: '100%',
+        minHeight: 0,
+        overflowY: hasFixedHeight ? 'auto' : 'hidden',
+        overflowX: 'hidden',
+      }}
+    >
+      <div ref={divRef} style={{ width: '100%', height: hasFixedHeight ? layout.height : '100%' }} />
+    </div>
+  )
 }
 
 // ─── Empty state ─────────────────────────────────────────────────────────────
@@ -384,7 +417,7 @@ function EmptyState() {
       flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
       flexDirection: 'column', gap: '0.5rem', color: '#555', padding: '3rem',
     }}>
-      <span style={{ fontSize: '3rem' }}>🔭</span>
+      <ChartNoAxesColumn size={48} strokeWidth={1.25} style={{ opacity: 0.35 }} />
       <p style={{ margin: 0, textAlign: 'center' }}>
         Sem dados para exibir.<br />Adicione eventos ao projeto.
       </p>
@@ -396,14 +429,14 @@ function EmptyState() {
 
 async function exportFullHtml(df, taktTime) {
   const jobs = [
-    { fn: () => buildSummary(df, taktTime),                                           title: '📊 Resumo Executivo' },
-    { fn: () => buildHands(df),                                                        title: '🤲 Análise de Mãos' },
-    { fn: () => buildGantt(df, '📅 Sequenciamento Geral'),                            title: '📅 Sequenciamento Geral' },
-    { fn: () => buildGantt(df.filter((r) => r.Mao === 'Esq'), '✋ Mão Esquerda'),     title: '✋ Mão Esquerda' },
-    { fn: () => buildGantt(df.filter((r) => r.Mao === 'Dir'), '🤚 Mão Direita'),      title: '🤚 Mão Direita' },
-    { fn: () => buildResources(df),                                                    title: '🎯 Recursos' },
-    { fn: () => buildValue(df),                                                        title: '💎 Valor' },
-    { fn: () => buildHeatmap(df),                                                      title: '🔥 Heatmap' },
+    { fn: () => buildSummary(df, taktTime),                                           title: 'Resumo Executivo' },
+    { fn: () => buildHands(df),                                                        title: 'Análise de Mãos' },
+    { fn: () => buildGantt(df, 'Sequenciamento Geral'),                               title: 'Sequenciamento Geral' },
+    { fn: () => buildGantt(df.filter((r) => r.Mao === 'Esq'), 'Mão Esquerda'),        title: 'Mão Esquerda' },
+    { fn: () => buildGantt(df.filter((r) => r.Mao === 'Dir'), 'Mão Direita'),         title: 'Mão Direita' },
+    { fn: () => buildResources(df),                                                    title: 'Recursos' },
+    { fn: () => buildValue(df),                                                        title: 'Valor' },
+    { fn: () => buildHeatmap(df),                                                      title: 'Heatmap' },
   ]
 
   const sections = []
@@ -437,7 +470,7 @@ async function exportFullHtml(df, taktTime) {
   </style>
 </head>
 <body>
-  <h1>📊 Relatório Completo — Cycle Time Analysis</h1>
+  <h1>Relatório Completo — Cycle Time Analysis</h1>
   <p class="sub">Gerado em ${new Date().toLocaleString('pt-BR')}</p>
   ${sections.join('\n')}
 </body>
@@ -463,9 +496,9 @@ export default function Dashboard({ events = [], taktTime = 0, fps = 30 }) {
     switch (activeChart) {
       case 'summary':     return buildSummary(df, taktTime)
       case 'hands':       return buildHands(df)
-      case 'gantt':       return buildGantt(df, '📅 Sequenciamento Geral (Ambas Mãos)')
-      case 'gantt_left':  return buildGantt(df.filter((r) => r.Mao === 'Esq'), '✋ Sequenciamento Mão Esquerda')
-      case 'gantt_right': return buildGantt(df.filter((r) => r.Mao === 'Dir'), '🤚 Sequenciamento Mão Direita')
+      case 'gantt':       return buildGantt(df, 'Sequenciamento Geral (Ambas Mãos)')
+      case 'gantt_left':  return buildGantt(df.filter((r) => r.Mao === 'Esq'), 'Sequenciamento Mão Esquerda')
+      case 'gantt_right': return buildGantt(df.filter((r) => r.Mao === 'Dir'), 'Sequenciamento Mão Direita')
       case 'resources':   return buildResources(df)
       case 'value':       return buildValue(df)
       case 'heatmap':     return buildHeatmap(df)
@@ -484,27 +517,48 @@ export default function Dashboard({ events = [], taktTime = 0, fps = 30 }) {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
 
       {/* ── Toolbar ── */}
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-        <select
-          value={activeChart}
-          onChange={(e) => setActiveChart(e.target.value)}
-          style={{
-            flex: 1, minWidth: '220px',
-            background: '#111', color: '#fff',
-            border: '1px solid #333', borderRadius: '0.4rem',
-            padding: '0.4rem 0.6rem', fontSize: '0.85rem', cursor: 'pointer',
-          }}
-        >
-          {CHART_LIST.map((c) => (
-            <option key={c.id} value={c.id}>{c.label}</option>
-          ))}
-        </select>
+      <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
 
+        {/* Icon-tab buttons */}
+        {CHART_LIST.map(({ id, label, Icon }) => {
+          const isActive = activeChart === id
+          return (
+            <button
+              key={id}
+              onClick={() => setActiveChart(id)}
+              title={label}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '0.3rem',
+                padding: '0.35rem 0.6rem',
+                borderRadius: '0.4rem',
+                border: isActive ? '1px solid #2a4a1a' : '1px solid #2a2a2a',
+                background: isActive ? '#172910' : '#111',
+                color: isActive ? '#e0e0e0' : '#888',
+                cursor: 'pointer',
+                fontSize: '0.78rem',
+                fontWeight: isActive ? 600 : 400,
+                whiteSpace: 'nowrap',
+                transition: 'border-color 0.15s, background 0.15s, color 0.15s',
+              }}
+            >
+              <Icon size={13} strokeWidth={2} />
+              <span style={{ display: 'none' }}>{label}</span>
+            </button>
+          )
+        })}
+
+        {/* Active chart label */}
+        <span style={{ fontSize: '0.8rem', color: '#aaa', marginLeft: '0.15rem', flex: 1 }}>
+          {CHART_LIST.find((c) => c.id === activeChart)?.label}
+        </span>
+
+        {/* Export button */}
         <button
           onClick={handleExport}
           disabled={!df.length || exporting}
           style={{
-            padding: '0.4rem 0.9rem',
+            display: 'flex', alignItems: 'center', gap: '0.35rem',
+            padding: '0.35rem 0.7rem',
             borderRadius: '0.4rem',
             border: '1px solid #1a4a2a',
             background: df.length && !exporting ? '#0d2e1a' : '#1a1a1a',
@@ -514,7 +568,10 @@ export default function Dashboard({ events = [], taktTime = 0, fps = 30 }) {
             whiteSpace: 'nowrap',
           }}
         >
-          {exporting ? '⏳ Exportando…' : '💾 Exportar HTML'}
+          {exporting
+            ? <><Loader size={13} strokeWidth={2} style={{ animation: 'spin 1s linear infinite' }} /> Exportando…</>
+            : <><FileDown size={13} strokeWidth={2} /> Exportar HTML</>
+          }
         </button>
 
         <span style={{ fontSize: '0.75rem', color: '#666' }}>
@@ -532,8 +589,10 @@ export default function Dashboard({ events = [], taktTime = 0, fps = 30 }) {
         flex: 1, minHeight: 0,
         border: '1px solid #222', borderRadius: '0.5rem',
         background: '#111',
-        overflow: 'auto',
+        overflow: 'hidden',
         padding: '0.5rem',
+        display: 'flex',
+        flexDirection: 'column',
       }}>
         {df.length === 0
           ? <EmptyState />

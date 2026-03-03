@@ -8,6 +8,7 @@
  *   onCreateEvent  fn(event) — called with a fully-formed project event on every EXIT
  */
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { Pencil, Trash2 } from 'lucide-react'
 import { HandLandmarker, FilesetResolver, DrawingUtils } from '@mediapipe/tasks-vision'
 import RoiOverlay from './RoiOverlay'
 import { RoiTracker, detectRoi } from '../lib/roiTracker'
@@ -258,7 +259,7 @@ export default function CameraView({ fps = 30, onCreateEvent }) {
             fontSize: '0.8rem',
           }}
         >
-          {drawingMode ? '✏️ Desenhando…' : '✏️ Desenhar ROI'}
+          {drawingMode ? <><Pencil size={13} strokeWidth={2} /> Desenhando…</> : <><Pencil size={13} strokeWidth={2} /> Desenhar ROI</>}
         </button>
 
         {rois.length > 0 && (
@@ -277,7 +278,7 @@ export default function CameraView({ fps = 30, onCreateEvent }) {
               fontSize: '0.8rem',
             }}
           >
-            🗑️ Limpar ROIs
+            <Trash2 size={13} strokeWidth={2} /> Limpar ROIs
           </button>
         )}
 

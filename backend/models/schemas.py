@@ -30,8 +30,21 @@ class Event(BaseModel):
         return self
 
 
+class RoiPoint(BaseModel):
+    x: float
+    y: float
+
+
+class Roi(BaseModel):
+    name: str = ""
+    points: list[RoiPoint] = Field(default_factory=list)
+    leftCategory: str = ""
+    rightCategory: str = ""
+
+
 class ProjectMeta(BaseModel):
     video_path: Optional[str] = None
+    video_filename: Optional[str] = None   # basename of the last loaded video
     fps: float = Field(default=30.0, gt=0)
     total_frames: int = Field(default=0, ge=0)
     takt_time: float = Field(default=10.0, ge=0)
@@ -40,6 +53,7 @@ class ProjectMeta(BaseModel):
 class Project(BaseModel):
     meta: ProjectMeta = Field(default_factory=ProjectMeta)
     events: list[Event] = Field(default_factory=list)
+    rois: list[Roi] = Field(default_factory=list)
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 

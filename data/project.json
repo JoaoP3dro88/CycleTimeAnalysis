@@ -1,10 +1,12 @@
 {
   "meta": {
     "video_path": null,
+    "video_filename": null,
     "fps": 30.0,
     "total_frames": 0,
     "takt_time": 10.0
   },
   "events": [],
-  "timestamp": "2026-03-02T16:11:37.891368"
+  "rois": [],
+  "timestamp": "2026-03-03T11:57:46.711016"
 }

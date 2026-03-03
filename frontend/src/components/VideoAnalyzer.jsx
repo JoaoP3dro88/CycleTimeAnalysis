@@ -8,13 +8,21 @@
  *   - A floating toolbar pinned to top-left (pointer-events:auto)
  *
  * Props:
- *   videoRef       React ref — the SAME <video> element used by VideoPlayer
- *   src            string    — current video src
- *   fps            number    — project FPS (used for frame counting)
- *   isReady        bool      — true once video metadata is loaded
- *   onCreateEvent  fn(event) — called on every ROI EXIT
+ *   videoRef        React ref — the SAME <video> element used by VideoPlayer
+ *   src             string    — current video src
+ *   fps             number    — project FPS (used for frame counting)
+ *   onCreateEvent   fn(event) — called on every ROI EXIT
+ *   preprocessCache React ref (Map<frameN, {landmarks,handedness}|null>)
+ *                   — when provided, landmark detection reads from cache
+ *                     instead of running the neural network in real-time.
+ *                     Falls back to live detection if the frame is not cached.
+ *
+ * Imperative handle (ref forwarded from App via forwardRef):
+ *   { landmarkerRef }  — gives the parent access to the loaded HandLandmarker
+ *                        instance so useVideoPreprocess can reuse it.
  */
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react'
+import { Loader, Activity, Play, Pencil, Trash2, Zap, Radio, AlertTriangle } from 'lucide-react'
 import { HandLandmarker, FilesetResolver, DrawingUtils } from '@mediapipe/tasks-vision'
 import RoiOverlay from './RoiOverlay'
 import { RoiTracker, detectRoi } from '../lib/roiTracker'
@@ -40,7 +48,10 @@ function getProbe(landmarks) {
   }
 }
 
-export default function VideoAnalyzer({ videoRef, src, fps = 30, onCreateEvent }) {
+export default forwardRef(function VideoAnalyzer(
+  { videoRef, src, fps = 30, onCreateEvent, preprocessCache, initialRois },
+  ref,
+) {
   const canvasRef = useRef(null)
   const landmarkerRef = useRef(null)
   const rafRef = useRef(null)
@@ -53,14 +64,31 @@ export default function VideoAnalyzer({ videoRef, src, fps = 30, onCreateEvent }
   const [modelReady, setModelReady] = useState(false)
   const [modelError, setModelError] = useState(null)
   const [active, setActive] = useState(false)
-  const [rois, setRois] = useState([])
+  const [rois, setRois] = useState(() => initialRois ?? [])
   const [drawingMode, setDrawingMode] = useState(false)
   const [activeRois, setActiveRois] = useState({ Left: null, Right: null })
   // Derived from videoRef directly — no prop needed
   const [videoReady, setVideoReady] = useState(false)
+  // 'cache' | 'live' | null — source of the last landmark detection
+  const [detectionSource, setDetectionSource] = useState(null)
+  // Accumulated hit counters (updated via ref to avoid per-frame re-renders;
+  // flushed to state every ~30 frames so the badge stays current).
+  const detectStatsRef = useRef({ cache: 0, live: 0, flushAt: 30 })
+  const [detectStats, setDetectStats] = useState({ cache: 0, live: 0 })
 
   const roisRef = useRef(rois)
   useEffect(() => { roisRef.current = rois }, [rois])
+
+  // When the parent passes a new initialRois array (e.g. after JSON import),
+  // seed the internal state. Using a stable JSON key avoids infinite loops.
+  const initialRoisKey = JSON.stringify(initialRois)
+  useEffect(() => {
+    if (initialRois && initialRois.length > 0) {
+      setRois(initialRois)
+      trackerRef.current.reset()
+      setActiveRois({ Left: null, Right: null })
+    }
+  }, [initialRoisKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const fpsRef = useRef(fps)
   useEffect(() => { fpsRef.current = fps }, [fps])
@@ -70,6 +98,16 @@ export default function VideoAnalyzer({ videoRef, src, fps = 30, onCreateEvent }
 
   const activeRef = useRef(active)
   useEffect(() => { activeRef.current = active }, [active])
+
+  // Keep a stable ref to the cache prop so the tick loop always reads the
+  // latest Map without triggering re-renders or stale closures.
+  // Because preprocessCache is already a ref (stable object), we just point
+  // our own ref at its .current on every render.
+  const preprocessCachePropRef = useRef(null)
+  preprocessCachePropRef.current = preprocessCache ?? null
+
+  // Expose landmarkerRef + getRois so App can read ROIs for export
+  useImperativeHandle(ref, () => ({ landmarkerRef, getRois: () => roisRef.current }), [])
 
   // ── Track video readiness directly from the element ──────────────────────
   useEffect(() => {
@@ -178,9 +216,36 @@ export default function VideoAnalyzer({ videoRef, src, fps = 30, onCreateEvent }
 
       const videoTimeMs = videoTime * 1000  // ms in video time
 
-      // detectForVideo requires a strictly-increasing timestamp — performance.now()
-      // is always monotonic, regardless of whether the video is paused.
-      const results = landmarkerRef.current.detectForVideo(video, performance.now())
+      // ── Landmark detection — cache-first, then live ───────────────────────
+      // If the video was pre-processed, read from the cache (O(1), no GPU).
+      // Fall back to live MediaPipe when the frame is not cached yet.
+      const cache = preprocessCachePropRef.current?.current ?? null
+      const currentFrame = Math.round(videoTime * fpsRef.current)
+      let results
+      let fromCache = false
+
+      if (cache && cache.has(currentFrame)) {
+        // Use pre-computed result (may be null = no hands on this frame)
+        const cached = cache.get(currentFrame)
+        results = cached ?? { landmarks: [], handedness: [] }
+        fromCache = true
+      } else {
+        // Live detection (no cache or frame not yet processed)
+        // detectForVideo requires a strictly-increasing timestamp — performance.now()
+        // is always monotonic, regardless of whether the video is paused.
+        results = landmarkerRef.current.detectForVideo(video, performance.now())
+      }
+
+      // ── Update detection-source stats (throttled to avoid re-render storm) ─
+      const stats = detectStatsRef.current
+      if (fromCache) { stats.cache++ } else { stats.live++ }
+      stats.flushAt--
+      if (stats.flushAt <= 0) {
+        setDetectionSource(fromCache ? 'cache' : 'live')
+        setDetectStats({ cache: stats.cache, live: stats.live })
+        stats.flushAt = 30
+      }
+
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
       const validLandmarks = (results.landmarks ?? []).filter(isValidHand)
@@ -288,6 +353,10 @@ export default function VideoAnalyzer({ videoRef, src, fps = 30, onCreateEvent }
     setActive(false)
     trackerRef.current.reset()
     maxEndFrameRef.current = { Left: -1, Right: -1 }
+    // Reset detection stats for the new video
+    detectStatsRef.current = { cache: 0, live: 0, flushAt: 30 }
+    setDetectStats({ cache: 0, live: 0 })
+    setDetectionSource(null)
   }, [src])
 
   const handleRoisChange = useCallback((nextRois) => {
@@ -359,7 +428,7 @@ export default function VideoAnalyzer({ videoRef, src, fps = 30, onCreateEvent }
             fontSize: '0.72rem', color: '#ccc',
             background: 'rgba(0,0,0,0.7)', padding: '0.2rem 0.4rem', borderRadius: '0.4rem',
           }}>
-            ⏳ Carregando modelo…
+            <Loader size={12} strokeWidth={2} style={{ animation: 'spin 1s linear infinite' }} /> Carregando modelo…
           </span>
         )}
         {modelError && (
@@ -367,7 +436,7 @@ export default function VideoAnalyzer({ videoRef, src, fps = 30, onCreateEvent }
             fontSize: '0.72rem', color: '#ffb4b4',
             background: 'rgba(0,0,0,0.7)', padding: '0.2rem 0.4rem', borderRadius: '0.4rem',
           }}>
-            ⚠️ {modelError}
+            <AlertTriangle size={12} strokeWidth={2} /> {modelError}
           </span>
         )}
 
@@ -386,8 +455,39 @@ export default function VideoAnalyzer({ videoRef, src, fps = 30, onCreateEvent }
             opacity: (!modelReady || !videoReady) ? 0.5 : 1,
           }}
         >
-          {active ? '🟢 Rastreando' : '▶ Rastrear'}
+          {active ? <><Activity size={13} strokeWidth={2} /> Rastreando</> : <><Play size={13} strokeWidth={2} /> Rastrear</>}
         </button>
+
+        {/* Detection source badge — shows whether the current frame came from
+            the pre-processed cache or from live MediaPipe inference */}
+        {active && detectionSource && (() => {
+          const total = detectStats.cache + detectStats.live
+          const cachePct = total > 0 ? Math.round((detectStats.cache / total) * 100) : 0
+          const isFullCache = detectionSource === 'cache'
+          return (
+            <span
+              title={
+                `Cache: ${detectStats.cache} frames\n` +
+                `Ao vivo: ${detectStats.live} frames\n` +
+                `Total processado: ${total}`
+              }
+              style={{
+                padding: '0.2rem 0.5rem',
+                borderRadius: '0.4rem',
+                fontSize: '0.7rem',
+                fontWeight: 600,
+                background: isFullCache ? 'rgba(0,80,20,0.85)' : 'rgba(80,40,0,0.85)',
+                border: `1px solid ${isFullCache ? '#2ca02c' : '#ff7f0e'}`,
+                color: isFullCache ? '#6fcf6f' : '#ffb347',
+                whiteSpace: 'nowrap',
+                cursor: 'default',
+              }}
+            >
+              {isFullCache ? <><Zap size={11} strokeWidth={2} /> Cache</> : <><Radio size={11} strokeWidth={2} /> Ao vivo</>}{' '}
+              <span style={{ opacity: 0.8 }}>{cachePct}%</span>
+            </span>
+          )
+        })()}
 
         {/* Draw ROI */}
         <button
@@ -402,7 +502,7 @@ export default function VideoAnalyzer({ videoRef, src, fps = 30, onCreateEvent }
             fontSize: '0.75rem',
           }}
         >
-          {drawingMode ? '✏️ Desenhando…' : '✏️ ROI'}
+          {drawingMode ? <><Pencil size={13} strokeWidth={2} /> Desenhando…</> : <><Pencil size={13} strokeWidth={2} /> ROI</>}
         </button>
 
         {/* Clear ROIs */}
@@ -423,7 +523,7 @@ export default function VideoAnalyzer({ videoRef, src, fps = 30, onCreateEvent }
               fontSize: '0.75rem',
             }}
           >
-            🗑️
+            <Trash2 size={13} strokeWidth={2} />
           </button>
         )}
 
@@ -452,4 +552,4 @@ export default function VideoAnalyzer({ videoRef, src, fps = 30, onCreateEvent }
       </div>
     </div>
   )
-}
+})

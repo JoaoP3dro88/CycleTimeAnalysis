@@ -25,6 +25,12 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Lucide icon spin utility (used for loading states) */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
 /* Notebook / split-screen tuning: slightly smaller overall UI on constrained viewports */
 @media (max-width: 70rem), (max-height: 44rem) {
   :root {
