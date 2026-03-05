@@ -7,6 +7,8 @@ class Settings(BaseModel):
 	cors_allow_origins: list[str] = [
 		"http://localhost:5173",
 		"http://127.0.0.1:5173",
+		"http://localhost:5174",
+		"http://127.0.0.1:5174",
 	]
 	data_dir: str = "./data"
 	videos_dirname: str = "videos"

@@ -54,4 +54,9 @@ logs/
 # =====================
 # Dados do projeto (opcional - remover se quiser versionar)
 # =====================
+data/videos/
+*.mp4
+*.avi
+*.mov
+*.mkv
 # data/

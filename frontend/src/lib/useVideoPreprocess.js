@@ -121,10 +121,14 @@ async function runPreprocess({
 
     // ── 2. Load the video into a detached element ─────────────────────────
     const video = document.createElement('video')
-    video.src         = src
-    video.muted       = true
-    video.preload     = 'auto'
-    video.crossOrigin = 'anonymous'
+    video.src     = src
+    video.muted   = true
+    video.preload = 'auto'
+    // crossOrigin is only needed for http(s) URLs (for canvas taint rules).
+    // Blob URLs are always same-origin and reject the CORS attribute.
+    if (!src.startsWith('blob:')) {
+      video.crossOrigin = 'anonymous'
+    }
 
     await new Promise((resolve, reject) => {
       video.onloadedmetadata = resolve
