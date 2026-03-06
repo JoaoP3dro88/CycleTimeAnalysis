@@ -59,4 +59,12 @@ data/videos/
 *.avi
 *.mov
 *.mkv
+
+# =====================
+# YOLO tooling (gerado localmente, não versionar)
+# =====================
+tools/frames/
+tools/frames_annotated/
+tools/model/
+runs/
 # data/
