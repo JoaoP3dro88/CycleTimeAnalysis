@@ -517,7 +517,7 @@ export default function Dashboard({ events = [], taktTime = 0, fps = 30 }) {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
 
       {/* ── Toolbar ── */}
-      <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+      <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap', rowGap: '0.4rem', marginBottom: '0.5rem' }}>
 
         {/* Icon-tab buttons */}
         {CHART_LIST.map(({ id, label, Icon }) => {
@@ -542,15 +542,13 @@ export default function Dashboard({ events = [], taktTime = 0, fps = 30 }) {
               }}
             >
               <Icon size={13} strokeWidth={2} />
-              <span style={{ display: 'none' }}>{label}</span>
+              <span>{label}</span>
             </button>
           )
         })}
 
-        {/* Active chart label */}
-        <span style={{ fontSize: '0.8rem', color: '#aaa', marginLeft: '0.15rem', flex: 1 }}>
-          {CHART_LIST.find((c) => c.id === activeChart)?.label}
-        </span>
+        {/* Spacer */}
+        <span style={{ flex: 1 }} />
 
         {/* Export button */}
         <button

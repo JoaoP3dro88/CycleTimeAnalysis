@@ -81,9 +81,28 @@ class HeatmapResponse(BaseModel):
     matrix: list[list[float]]
 
 
+class GanttItem(BaseModel):
+    operation: str
+    object: str
+    resource: str
+    category: str
+    start_frame: int
+    end_frame: int
+    duration_s: float
+
+
+class ObjectAnalysisItem(BaseModel):
+    object: str
+    total_duration_s: float
+    tav_duration_s: float
+    waste_percent: float
+    event_count: int
+
+
 class AnalyticsResponse(BaseModel):
     summary: AnalyticsSummary
     value_by_category: list[ValueByCategoryItem]
     yamazumi: list[YamazumiItem]
     heatmap: HeatmapResponse
-    # gantt and object analysis can be added next
+    gantt: list[GanttItem]
+    object_analysis: list[ObjectAnalysisItem]

@@ -6,7 +6,9 @@ from ..models.schemas import (
     AnalyticsResponse,
     AnalyticsSummary,
     Event,
+    GanttItem,
     HeatmapResponse,
+    ObjectAnalysisItem,
     ValueByCategoryItem,
     YamazumiItem,
 )
@@ -66,10 +68,52 @@ def compute_heatmap(events: list[Event]) -> HeatmapResponse:
     return HeatmapResponse(operations=operations, objects=objects, matrix=matrix)
 
 
+def compute_gantt(events: list[Event]) -> list[GanttItem]:
+    return [
+        GanttItem(
+            operation=e.operation,
+            object=e.object,
+            resource=e.resource,
+            category=e.category,
+            start_frame=e.start_frame,
+            end_frame=e.end_frame,
+            duration_s=round(e.duration, 6),
+        )
+        for e in events
+    ]
+
+
+def compute_object_analysis(events: list[Event]) -> list[ObjectAnalysisItem]:
+    agg: dict[str, dict[str, float]] = defaultdict(lambda: {"total": 0.0, "tav": 0.0, "count": 0.0})
+    for e in events:
+        agg[e.object]["total"] += e.duration
+        agg[e.object]["count"] += 1
+        if e.category == "TAV":
+            agg[e.object]["tav"] += e.duration
+
+    result: list[ObjectAnalysisItem] = []
+    for obj, vals in sorted(agg.items(), key=lambda x: x[0]):
+        total = vals["total"]
+        tav = vals["tav"]
+        waste_pct = 0.0 if total == 0 else round(100.0 - (tav / total * 100.0), 6)
+        result.append(
+            ObjectAnalysisItem(
+                object=obj,
+                total_duration_s=round(total, 6),
+                tav_duration_s=round(tav, 6),
+                waste_percent=waste_pct,
+                event_count=int(vals["count"]),
+            )
+        )
+    return result
+
+
 def compute_analytics(events: list[Event]) -> AnalyticsResponse:
     return AnalyticsResponse(
         summary=compute_summary(events),
         value_by_category=compute_value_by_category(events),
         yamazumi=compute_yamazumi(events),
         heatmap=compute_heatmap(events),
+        gantt=compute_gantt(events),
+        object_analysis=compute_object_analysis(events),
     )

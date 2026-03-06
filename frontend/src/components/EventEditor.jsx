@@ -8,6 +8,11 @@ function badgeClass(category) {
   return 'badge'
 }
 
+// Returns true when the event is missing a meaningful category
+function isMissingCategory(event) {
+  return !event.category || event.category.trim() === ''
+}
+
 export default function EventEditor({
   fps = 30,
   events,
@@ -173,6 +178,23 @@ export default function EventEditor({
 
         <div style={{ display: 'flex', gap: '0.65rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <span className="badge">Eventos: {safeEvents.length}</span>
+          {safeEvents.filter(isMissingCategory).length > 0 && (
+            <span
+              title="Estes eventos não têm categoria e serão contados como desperdício no dashboard"
+              style={{
+                padding: '0.2rem 0.5rem',
+                borderRadius: '0.4rem',
+                fontSize: '0.78rem',
+                background: 'rgba(255,127,14,0.12)',
+                border: '1px solid rgba(255,127,14,0.45)',
+                color: '#ffb347',
+                cursor: 'default',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              ⚠ {safeEvents.filter(isMissingCategory).length} sem categoria
+            </span>
+          )}
         </div>
       </div>
 
@@ -223,7 +245,12 @@ export default function EventEditor({
                 key={idx}
                 style={{
                   borderTop: '1px solid #222',
-                  background: idx === selectedIndex ? 'rgba(31, 41, 55, 0.6)' : 'transparent',
+                  background: idx === selectedIndex
+                    ? 'rgba(31, 41, 55, 0.6)'
+                    : isMissingCategory(e)
+                    ? 'rgba(255, 127, 14, 0.04)'
+                    : 'transparent',
+                  outline: isMissingCategory(e) ? '1px solid rgba(255,127,14,0.2)' : 'none',
                   cursor: 'pointer',
                 }}
                 onClick={() => setSelectedIndex(idx)}
