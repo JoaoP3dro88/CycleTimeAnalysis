@@ -96,6 +96,10 @@ function App() {
     try {
       const p = await apiGet('/api/projects/current')
       setProject(p)
+      // Restore persisted ROIs into the VideoAnalyzer
+      if (Array.isArray(p?.rois) && p.rois.length > 0) {
+        setImportedRois(p.rois)
+      }
       const a = await apiGet('/api/analytics/current')
       setAnalytics(a)
     } catch (e) {
@@ -115,15 +119,9 @@ function App() {
   }
 
   useEffect(() => {
-    ;(async () => {
-      // Option A: always start from zero when opening the app.
-      try {
-        await apiPost('/api/projects/reset', {})
-      } catch {
-        // If the backend is old or temporarily unavailable, fall back to loading whatever exists.
-      }
-      refreshAll()
-    })()
+    // Load whatever project exists in the backend — don't reset on open.
+    // The user can reset manually via the "Resetar" button.
+    refreshAll()
   }, [])
 
   async function onResetProject() {
@@ -238,6 +236,46 @@ function App() {
     }
   }
 
+  // Upload video to backend + persist fps / total_frames / video_path in meta.
+  // Called after the video metadata is probed so we have the real values.
+  function persistVideoMeta(blobUrl, file, detectedFps, totalFrames) {
+    const formData = new FormData()
+    formData.append('file', file)
+    fetch('/api/projects/videos/upload', { method: 'POST', body: formData })
+      .then((r) => r.ok ? r.json() : null)
+      .then((result) => {
+        // Use a fresh snapshot of project state via the setter callback so we
+        // never close over a stale `project` value (the upload is async).
+        setProject((prev) => {
+          const base = prev ?? { meta: { fps: detectedFps, total_frames: totalFrames, takt_time: metaTakt }, events: [], rois: [] }
+          const nextProject = {
+            ...base,
+            meta: {
+              ...base.meta,
+              fps: detectedFps,
+              total_frames: totalFrames,
+              takt_time: base.meta?.takt_time ?? metaTakt,
+              ...(result ? { video_filename: result.name, video_path: result.absolute_path } : {}),
+            },
+          }
+          saveProject(nextProject).catch(() => {})
+          return nextProject
+        })
+      })
+      .catch(() => {
+        // Upload failed (non-fatal) — still update fps/total_frames locally
+        setProject((prev) => {
+          const base = prev ?? { meta: { fps: detectedFps, total_frames: totalFrames, takt_time: metaTakt }, events: [], rois: [] }
+          const nextProject = {
+            ...base,
+            meta: { ...base.meta, fps: detectedFps, total_frames: totalFrames },
+          }
+          saveProject(nextProject).catch(() => {})
+          return nextProject
+        })
+      })
+  }
+
   // Persist FPS / takt time edits immediately
   const applyMeta = useCallback((patch) => {
     const newFps  = patch.fps  ?? metaFps
@@ -295,28 +333,48 @@ function App() {
                 setError('')
                 e.target.value = ''
 
-                // Upload video to backend so the absolute path is known and
-                // future imports can serve the file directly from disk.
-                const formData = new FormData()
-                formData.append('file', file)
-                fetch('/api/projects/videos/upload', { method: 'POST', body: formData })
-                  .then((r) => r.ok ? r.json() : null)
-                  .then((result) => {
-                    if (!result) return
-                    // Persist video_path (absolute) + video_filename into meta
-                    const nextProject = {
-                      ...(project ?? { meta: { fps: metaFps, total_frames: 0, takt_time: metaTakt }, events: [], rois: [] }),
-                      meta: {
-                        ...(project?.meta ?? {}),
-                        fps: metaFps,
-                        takt_time: metaTakt,
-                        video_filename: result.name,
-                        video_path: result.absolute_path,
-                      },
+                // ── Read FPS and total_frames from the video metadata ─────────
+                // We create a temporary <video> element to probe duration.
+                // FPS is estimated via requestVideoFrameCallback when available,
+                // otherwise we keep the current metaFps value.
+                const probeVideo = document.createElement('video')
+                probeVideo.src = url
+                probeVideo.muted = true
+                probeVideo.preload = 'auto'
+
+                probeVideo.addEventListener('loadedmetadata', () => {
+                  const duration = probeVideo.duration || 0
+
+                  // Estimate FPS using requestVideoFrameCallback (gives real frame count).
+                  // If not supported, fall back to the current metaFps setting.
+                  if (typeof probeVideo.requestVideoFrameCallback === 'function') {
+                    let frameCount = 0
+                    let startTime = null
+                    const sampleDuration = Math.min(2, duration) // sample up to 2 s
+
+                    const tick = (_now, meta) => {
+                      if (startTime === null) startTime = meta.mediaTime
+                      frameCount++
+                      const elapsed = meta.mediaTime - startTime
+                      if (elapsed < sampleDuration && meta.mediaTime < duration - 0.1) {
+                        probeVideo.requestVideoFrameCallback(tick)
+                      } else {
+                        const detectedFps = elapsed > 0 ? Math.round(frameCount / elapsed) : metaFps
+                        const safeDetectedFps = detectedFps >= 1 && detectedFps <= 240 ? detectedFps : metaFps
+                        const totalFrames = Math.round(duration * safeDetectedFps)
+                        setMetaFps(safeDetectedFps)
+                        persistVideoMeta(url, file, safeDetectedFps, totalFrames)
+                        probeVideo.pause()
+                      }
                     }
-                    saveProject(nextProject).catch(() => {})
-                  })
-                  .catch(() => {/* non-fatal — local blob still works */})
+                    probeVideo.requestVideoFrameCallback(tick)
+                    probeVideo.play().catch(() => {})
+                  } else {
+                    // No rVFC support — use current FPS, compute total_frames from duration
+                    const totalFrames = Math.round(duration * metaFps)
+                    persistVideoMeta(url, file, metaFps, totalFrames)
+                  }
+                }, { once: true })
               }}
               style={{ display: 'none' }}
             />
@@ -577,6 +635,15 @@ function App() {
                         fps={fps}
                         preprocessCache={preprocessCacheRef}
                         initialRois={importedRois}
+                        onRoisChange={(nextRois) => {
+                          // Auto-persist ROIs whenever the user draws/edits/removes them
+                          setProject((prev) => {
+                            const base = prev ?? { meta: { fps, total_frames: 0, takt_time: metaTakt }, events: [], rois: [] }
+                            const nextProject = { ...base, rois: nextRois }
+                            saveProject(nextProject).catch((e) => setError(e.message ?? String(e)))
+                            return nextProject
+                          })
+                        }}
                         onCreateEvent={(newEvent) => {
                           const currentProject = project ?? {
                             meta: { fps, total_frames: 0, takt_time: 10 },
@@ -702,6 +769,12 @@ function App() {
         <span>FPS: <b style={{ color: '#888' }}>{fps}</b></span>
         <span>Takt: <b style={{ color: '#888' }}>{metaTakt}s</b></span>
         <span>Eventos: <b style={{ color: '#888' }}>{project?.events?.length ?? 0}</b></span>
+        {project?.meta?.total_frames > 0 && (
+          <span>Frames: <b style={{ color: '#888' }}>{project.meta.total_frames}</b></span>
+        )}
+        {project?.rois?.length > 0 && (
+          <span>ROIs: <b style={{ color: '#888' }}>{project.rois.length}</b></span>
+        )}
         {videoSrc && <span style={{ color: '#444' }}>● Vídeo carregado</span>}
       </footer>
     </div>

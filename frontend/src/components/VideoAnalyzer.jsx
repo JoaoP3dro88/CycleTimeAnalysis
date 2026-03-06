@@ -49,7 +49,7 @@ function getProbe(landmarks) {
 }
 
 export default forwardRef(function VideoAnalyzer(
-  { videoRef, src, fps = 30, onCreateEvent, preprocessCache, initialRois },
+  { videoRef, src, fps = 30, onCreateEvent, preprocessCache, initialRois, onRoisChange },
   ref,
 ) {
   const canvasRef = useRef(null)
@@ -359,11 +359,15 @@ export default forwardRef(function VideoAnalyzer(
     setDetectionSource(null)
   }, [src])
 
+  const onRoisChangeRef = useRef(onRoisChange)
+  useEffect(() => { onRoisChangeRef.current = onRoisChange }, [onRoisChange])
+
   const handleRoisChange = useCallback((nextRois) => {
     setRois(nextRois)
     trackerRef.current.reset()
     setActiveRois({ Left: null, Right: null })
     setDrawingMode(false)
+    onRoisChangeRef.current?.(nextRois)
   }, [])
 
   const toggleActive = () => {
