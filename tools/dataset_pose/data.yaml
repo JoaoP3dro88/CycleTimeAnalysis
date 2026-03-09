@@ -1,0 +1,12 @@
+path: C:/Users/klj1ct/Desktop/CycleTimeAnalysis/tools/dataset_pose
+train: images/train
+val:   images/val
+test:  images/test
+
+nc: 1
+names: ['robot_arm']
+
+kpt_shape: [5, 3]  # [num_keypoints, dim(x,y,visibility)]
+# keypoints: 0=base, 1=eixo1, 2=eixo2, 3=eixo3, 4=ponta
+
+kpt_shape: [5, 3]  # [num_keypoints, dim(x,y,visibility)]
