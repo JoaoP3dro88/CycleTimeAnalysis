@@ -65,6 +65,11 @@ data/videos/
 # =====================
 tools/frames/
 tools/frames_annotated/
+tools/frames_task_1/
+tools/frames_task_2/
+tools/results/
+tools/dataset_pose*/
 tools/model/
+*.tar.gz
 runs/
 # data/

@@ -1,0 +1,556 @@
+================================================================================
+  CYCLE TIME ANALYSIS — DOCUMENTAÇÃO DO PROJETO
+  Versão: 2.0 (desenvolvimento ativo)
+  Última atualização: Março 2026
+  Repositório: github.com/JoaoP3dro88/CycleTimeAnalysis
+  Branch ativo: development
+================================================================================
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  1. VISÃO GERAL DO PROJETO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+O Cycle Time Analysis é uma ferramenta de análise de tempo de ciclo para
+processos industriais. Permite ao engenheiro de processo carregar um vídeo
+de uma operação, detectar automaticamente movimentos via IA, marcar eventos
+(operações), classificá-los por categoria de valor, e visualizar os resultados
+em um dashboard analítico completo.
+
+Objetivo principal:
+  → Medir e classificar o tempo real de cada operação de um ciclo produtivo
+  → Identificar desperdícios (NNVA/TNAV) vs. atividades de valor (TAV)
+  → Apoiar projetos de melhoria de processo (Lean, Kaizen, etc.)
+
+Stack tecnológica:
+  - Backend : Python 3.12 + FastAPI + Pydantic v2
+  - Frontend: React 19 + Vite + Plotly.js (gráficos)
+  - IA atual: MediaPipe Tasks-Vision (detecção de mãos)
+  - IA futura: YOLOv8-pose ONNX (rastreio de braços robóticos)
+  - Storage : Arquivo JSON local (data/project.json)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  2. ARQUITETURA DO SISTEMA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ┌─────────────────────────────────┐
+  │         FRONTEND (React)        │
+  │  App.jsx — shell principal      │
+  │  ├─ VideoAnalyzer.jsx           │  ← detecção IA + ROIs
+  │  ├─ EventEditor.jsx             │  ← tabela de eventos
+  │  ├─ Dashboard.jsx               │  ← 8 gráficos Plotly
+  │  ├─ VideoPlayer.jsx             │  ← player com canvas overlay
+  │  ├─ CameraView.jsx              │  ← captura ao vivo por webcam
+  │  └─ RoiOverlay.jsx              │  ← overlay de ROIs no vídeo
+  │                                 │
+  │  lib/                           │
+  │  ├─ api.js                      │  ← chamadas HTTP ao backend
+  │  ├─ roiTracker.js               │  ← lógica de detecção ponto/ROI
+  │  ├─ time.js                     │  ← conversão frames ↔ tempo
+  │  └─ useVideoPreprocess.js       │  ← pré-processa vídeo com MediaPipe
+  └──────────────┬──────────────────┘
+                 │ HTTP REST (porta 8000)
+  ┌──────────────▼──────────────────┐
+  │         BACKEND (FastAPI)       │
+  │  main.py — app factory          │
+  │  api/routers/                   │
+  │  ├─ projects.py                 │  ← CRUD do projeto
+  │  └─ analytics.py                │  ← cálculo dos indicadores
+  │  services/                      │
+  │  ├─ storage_service.py          │  ← leitura/escrita JSON
+  │  └─ analytics_service.py        │  ← lógica de negócio
+  │  models/                        │
+  │  ├─ schemas.py                  │  ← modelos Pydantic
+  │  └─ model.py                    │  ← modelo de domínio
+  └──────────────┬──────────────────┘
+                 │
+  ┌──────────────▼──────────────────┐
+  │     STORAGE (data/project.json) │
+  │  - meta (fps, frames, video)    │
+  │  - events[] (operações)         │
+  │  - rois[] (regiões de interesse)│
+  └─────────────────────────────────┘
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  3. FUNCIONALIDADES IMPLEMENTADAS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  3.1 CARREGAMENTO DE VÍDEO
+  ─────────────────────────
+  • Upload de arquivo de vídeo (.mp4, .avi, .mov, .mkv) via interface
+  • Detecção automática de FPS real via requestVideoFrameCallback (2s de amostra)
+    - Fallback para FPS dos metadados se API não disponível
+  • Cálculo automático de total_frames (duração × FPS detectado)
+  • Persistência do vídeo no backend (data/videos/) para reload entre sessões
+  • Suporte a captura ao vivo por webcam (modo câmera)
+
+  3.2 DETECÇÃO DE MOVIMENTOS COM IA (MediaPipe)
+  ──────────────────────────────────────────────
+  • Pré-processamento completo do vídeo antes da análise
+    - Executa MediaPipe Hand Landmark Detection em todos os frames
+    - Cache dos resultados em Map<frameN, {landmarks, handedness}>
+    - Toast de notificação ao concluir (auto-hide 5 segundos)
+  • Detecção em tempo real durante navegação do vídeo
+    - Lê do cache se disponível, executa ao vivo como fallback
+  • Suporte a mãos direita e esquerda simultaneamente
+  • 21 pontos de landmark por mão detectada
+
+  3.3 REGIÕES DE INTERESSE (ROIs)
+  ────────────────────────────────
+  • Definição de ROIs poligonais diretamente sobre o vídeo
+    - Clique para adicionar pontos, duplo-clique para fechar polígono
+  • Cada ROI possui:
+    - Nome identificador
+    - Categoria para mão esquerda (leftCategory)
+    - Categoria para mão direita (rightCategory)
+  • Detecção automática de entrada/saída da mão nas ROIs
+    - Ponto de referência: landmark do pulso (índice 0)
+    - Algoritmo ray-casting para ponto-em-polígono
+  • Auto-persistência: ROIs salvas automaticamente no project.json
+  • Restauração automática ao reabrir o projeto
+
+  3.4 EDITOR DE EVENTOS
+  ──────────────────────
+  • Tabela editável com todas as operações do ciclo
+  • Campos por evento:
+    - Operação (nome da atividade)
+    - Frame início / Frame fim
+    - Duração (calculada automaticamente em segundos)
+    - Categoria (TAV / NNVA / TNAV / vazio)
+    - Objeto (peça/componente manipulado)
+    - Recurso (operador/mão: Mão Direita, Mão Esquerda, etc.)
+  • Marcação rápida de eventos:
+    - Botão "Marcar Início" e "Marcar Fim" via frame atual do vídeo
+    - Atalho de teclado para navegação
+  • Loop de evento: reproduz em loop o trecho de um evento selecionado
+  • Aviso visual de categoria ausente:
+    - Linha com fundo âmbar para eventos sem categoria
+    - Badge "⚠ N sem categoria" na toolbar
+  • Importação/exportação de eventos em JSON
+
+  3.5 DASHBOARD ANALÍTICO (8 gráficos)
+  ──────────────────────────────────────
+  Todos os gráficos são gerados com Plotly.js e atualizados dinamicamente.
+
+  [1] YAMAZUMI (Stacked Bar)
+      → Tempo empilhado por recurso e categoria (TAV/NNVA/TNAV)
+      → Identifica desbalanceamento de carga entre recursos
+
+  [2] GANTT
+      → Linha do tempo de todas as operações
+      → Cor por categoria, eixo X em segundos
+      → Visualiza sequência e sobreposição de atividades
+
+  [3] HEATMAP
+      → Matriz Operação × Objeto
+      → Intensidade = duração total (segundos)
+      → Identifica operações mais frequentes por objeto
+
+  [4] SUNBURST
+      → Hierarquia: Categoria → Objeto → Operação
+      → Proporção visual de cada nível
+
+  [5] PARETO
+      → Operações ordenadas por duração total (decrescente)
+      → Linha de percentual acumulado
+      → Identifica os "poucos vitais" do desperdício
+
+  [6] DISTRIBUIÇÃO DE DURAÇÃO (Box Plot)
+      → Variabilidade de duração por operação
+      → Detecta inconsistências e outliers
+
+  [7] LINHA DO TEMPO (Scatter)
+      → Duração de cada evento ao longo do tempo
+      → Visualiza tendências e variações durante o ciclo
+
+  [8] ANÁLISE POR OBJETO (Bar)
+      → Total de tempo por objeto manipulado
+      → Separado por TAV vs. desperdício
+
+  3.6 INDICADORES ANALÍTICOS (Backend)
+  ──────────────────────────────────────
+  Calculados em analytics_service.py:
+
+  • Summary (resumo geral):
+    - Tempo total do ciclo (segundos)
+    - Tempo TAV (valor agregado)
+    - % de desperdício (NNVA + TNAV)
+    - Total de operações
+
+  • Value by Category:
+    - Duração total por categoria (TAV / NNVA / TNAV)
+
+  • Yamazumi data:
+    - Duração por combinação recurso × categoria
+
+  • Heatmap data:
+    - Matriz operação × objeto com durações
+
+  • Gantt data:
+    - Um item por evento com todos os campos
+
+  • Object Analysis:
+    - Por objeto: total, TAV, % desperdício, contagem de eventos
+
+  3.7 PERSISTÊNCIA DE DADOS
+  ──────────────────────────
+  • Estado completo salvo em data/project.json
+  • Campos persistidos:
+    - meta: fps, total_frames, video_path, video_filename, takt_time
+    - events[]: todas as operações com seus campos
+    - rois[]: todas as ROIs com pontos e categorias
+    - timestamp: data/hora da última modificação
+  • Carregamento automático ao abrir a aplicação (sem reset)
+  • Exportação manual do projeto em JSON (botão Download)
+  • Importação de projeto externo (botão Import)
+
+  3.8 TESTES AUTOMATIZADOS (Backend)
+  ────────────────────────────────────
+  • 30 testes unitários em backend/tests/test_analytics_service.py
+  • Cobertura: todas as funções de analytics_service.py
+  • Framework: pytest 9.0.2
+  • Execução: backend\.venv\Scripts\pytest backend/tests/ -v
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  4. API REST — ENDPOINTS DISPONÍVEIS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Base URL: http://127.0.0.1:8000/api
+
+  PROJETOS (/api/projects)
+  ┌─────────────────────────────────┬──────────┬────────────────────────────────┐
+  │ Endpoint                        │ Método   │ Descrição                      │
+  ├─────────────────────────────────┼──────────┼────────────────────────────────┤
+  │ /api/projects                   │ GET      │ Carrega projeto atual          │
+  │ /api/projects                   │ POST     │ Salva projeto completo         │
+  │ /api/projects/meta              │ PATCH    │ Atualiza metadados (fps, etc.) │
+  │ /api/projects/events            │ PUT      │ Substitui lista de eventos     │
+  │ /api/projects/rois              │ PUT      │ Substitui lista de ROIs        │
+  │ /api/projects/reset             │ POST     │ Reseta projeto (zera tudo)     │
+  │ /api/projects/upload-video      │ POST     │ Upload do arquivo de vídeo     │
+  │ /api/projects/videos-static/... │ GET      │ Serve arquivo de vídeo         │
+  └─────────────────────────────────┴──────────┴────────────────────────────────┘
+
+  ANALYTICS (/api/analytics)
+  ┌─────────────────────────────────┬──────────┬────────────────────────────────┐
+  │ Endpoint                        │ Método   │ Descrição                      │
+  ├─────────────────────────────────┼──────────┼────────────────────────────────┤
+  │ /api/analytics                  │ GET      │ Calcula e retorna todos        │
+  │                                 │          │ os indicadores analíticos      │
+  └─────────────────────────────────┴──────────┴────────────────────────────────┘
+
+  HEALTH
+  ┌─────────────────────────────────┬──────────┬────────────────────────────────┐
+  │ /health                         │ GET      │ Verifica se backend está ok    │
+  └─────────────────────────────────┴──────────┴────────────────────────────────┘
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  5. MÓDULO DE IA — RASTREIO DE BRAÇOS ROBÓTICOS (EM DESENVOLVIMENTO)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  5.1 OBJETIVO
+  ─────────────
+  Substituir/complementar o MediaPipe (detecção de mãos humanas) por um modelo
+  de IA capaz de rastrear braços robóticos industriais, detectando seus
+  keypoints articulares para alimentar o sistema de ROIs e gerar eventos
+  automaticamente.
+
+  5.2 ARQUITETURA DO MODELO
+  ──────────────────────────
+  Tecnologia: YOLOv8-pose (pose estimation com keypoints)
+  Formato de inferência: ONNX (Open Neural Network Exchange)
+  Inferência no navegador: onnxruntime-web (WebAssembly)
+
+  5 keypoints por braço detectado:
+    [0] base     → ponto de fixação/base do braço
+    [1] eixo1    → primeira junta (ombro)
+    [2] eixo2    → segunda junta (cotovelo/pulso)
+    [3] eixo3    → terceira junta
+    [4] ponta    → extremidade da garra ← "probe point" para ROIs
+
+  O keypoint [4] (ponta) é o ponto de referência usado para detectar
+  entrada/saída nas ROIs — equivalente ao pulso no MediaPipe de mãos.
+
+  5.3 ESTADO ATUAL DO MODELO
+  ───────────────────────────
+  Modelo v2 treinado e disponível em: tools/model/robot_arm_modelv2.onnx
+
+  Dataset de treino (v2):
+    - 2662 imagens anotadas
+    - 10+ modelos de robôs diferentes
+    - Fontes: vídeos da empresa (pasqua_1, pasqua_2, 21217, 22154)
+              + vídeos públicos do YouTube (KUKA, FANUC, DIY)
+    - 5 keypoints por instância
+    - Split: 75% treino / 15% val / 10% teste
+
+  Resultados do treino v2 (Google Colab, T4 GPU, 100 épocas):
+    - mAP50 (bbox)  : 0.995
+    - mAP50 (pose)  : 0.995
+    - mAP50-95 pose : 0.992
+    - Precision     : 0.994
+    - Recall        : 0.996
+    - Tempo de treino: ~54 minutos
+
+  Limitação atual:
+    → Modelo funciona bem nos robôs presentes no dataset de treino
+    → Para robôs não vistos, confiança cai abaixo do threshold
+    → Solução: adicionar novos vídeos ao dataset e retreinar (fine-tuning)
+
+  5.4 FERRAMENTAS DE TREINAMENTO (tools/)
+  ────────────────────────────────────────
+  tools/extract_frames.py
+    → Extrai frames de um vídeo em intervalos regulares
+    → Uso: python tools/extract_frames.py --video video.mp4 --output tools/frames --interval 10
+
+  tools/coco_keypoints_to_yolo_pose.py
+    → Converte anotações COCO Keypoints (exportadas do CVAT) para
+      formato YOLOv8-pose (.txt por imagem)
+    → Gera data.yaml, classes.txt e split train/val/test automaticamente
+    → Uso: python tools/coco_keypoints_to_yolo_pose.py --coco annotations.json
+             --images tools/frames --output tools/dataset_pose
+
+  tools/validate_onnx.py
+    → Valida o modelo ONNX exportado rodando inferência em imagens estáticas
+    → Desenha bboxes + keypoints + skeleton nos resultados
+    → Uso: python tools/validate_onnx.py --model tools/model/best.onnx
+             --source tools/frames --output tools/results
+
+  tools/annotate_video.py
+    → Roda inferência num vídeo inteiro e gera vídeo anotado (mp4)
+    → Suporta caminhos com caracteres especiais via cópia temporária
+    → Uso: python tools/annotate_video.py --video video.mp4
+             --model tools/model/best.onnx --output resultado.mp4
+
+  tools/check_dataset.py
+    → Analisa distribuição de origens no dataset (por vídeo/fonte)
+    → Identifica desbalanceamento entre fontes
+
+  tools/FASE1_DATASET_TREINO.md
+    → Guia completo passo a passo para criar dataset e treinar no Colab
+
+  5.5 FLUXO DE RETREINO (fine-tuning)
+  ─────────────────────────────────────
+  Para adicionar novos robôs ao modelo sem perder o conhecimento anterior:
+
+  1. Extrair frames do novo vídeo:
+     python tools/extract_frames.py --video novo_robo.mp4 --output tools/frames_novo --interval 10
+
+  2. Anotar no CVAT (app.cvat.ai):
+     - Criar nova task no projeto existente
+     - Label: robot_arm (Skeleton) com 5 keypoints em ordem
+     - Exportar projeto completo: COCO Keypoints 1.0
+
+  3. Mesclar JSONs das tasks:
+     python tools/merge_coco.py (ou script manual de merge)
+
+  4. Converter para YOLOv8-pose:
+     python tools/coco_keypoints_to_yolo_pose.py --coco merged.json ...
+
+  5. Compactar para Colab:
+     tar -czf dataset_pose_v3.tar.gz -C tools/dataset_pose_v3 .
+
+  6. Treinar no Google Colab (fine-tuning):
+     model = YOLO('robot_arm_pose_v2_best.pt')  # seu modelo anterior
+     model.train(data='data.yaml', epochs=50, ...)
+
+  7. Exportar e substituir:
+     model.export(format='onnx', imgsz=640, opset=12, simplify=True)
+     → Salvar em tools/model/robot_arm_modelv3.onnx
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  6. IMPLEMENTAÇÕES FUTURAS PLANEJADAS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  6.1 FASE 2 — INTEGRAÇÃO DO MODELO ONNX NO APP (RobotAnalyzer)
+  ───────────────────────────────────────────────────────────────
+  Criar frontend/src/components/RobotAnalyzer.jsx como alternativa ao
+  VideoAnalyzer.jsx (que usa MediaPipe para mãos humanas).
+
+  Funcionalidades planejadas:
+  • Carregamento do modelo ONNX via onnxruntime-web (WebAssembly)
+  • Inferência frame a frame durante reprodução do vídeo
+  • Extração do keypoint [4] (ponta da garra) como probe point {x, y}
+  • Plug-in direto no sistema de ROIs existente (detectRoi em roiTracker.js)
+  • Seletor na interface: "Modo Mão Humana" vs. "Modo Braço Robótico"
+  • Overlay visual dos 5 keypoints e skeleton sobre o vídeo
+  • Suporte a múltiplos braços no mesmo frame
+
+  Dependência a instalar:
+    npm install onnxruntime-web  (em frontend/)
+
+  6.2 COMPARATIVO "CICLO REAL vs. CICLO ANALISADO"
+  ──────────────────────────────────────────────────
+  Funcionalidade para validar a precisão da análise comparando o tempo
+  medido pela ferramenta com o tempo real cronometrado no chão de fábrica.
+
+  Conceito:
+    • "Ciclo Real"     → tempo medido por cronômetro/sensor na linha de produção
+    • "Ciclo Analisado" → tempo calculado pela ferramenta via análise de vídeo
+
+  Implementação planejada:
+
+  Backend:
+    • Novo campo em ProjectMeta: cycle_time_real (segundos)
+    • Novo endpoint: PATCH /api/projects/cycle-time
+    • Novo serviço: compute_cycle_comparison() em analytics_service.py
+      - Calcula desvio absoluto e percentual
+      - Identifica operações com maior discrepância
+
+  Frontend:
+    • Campo de entrada do "Tempo Real" na aba de configurações (Settings)
+    • Nova seção no Dashboard: "Comparativo de Ciclo"
+      - Gauge/indicador: Ciclo Analisado vs. Ciclo Real
+      - % de desvio com código de cor (verde < 5%, amarelo 5-15%, vermelho > 15%)
+      - Tabela de divergência por operação
+    • Gráfico de barras comparando:
+      - Tempo total da ferramenta vs. tempo real cronometrado
+      - Breakdown por categoria (TAV/NNVA/TNAV) vs. expectativa
+
+  Casos de uso:
+    • Validar se o analista capturou todas as operações do ciclo
+    • Identificar operações não detectadas (gaps no vídeo)
+    • Calibrar o modelo de análise com dados reais da produção
+    • Gerar relatório de confiabilidade da análise
+
+  6.3 MELHORIAS GERAIS PLANEJADAS
+  ────────────────────────────────
+  • Suporte a múltiplos projetos (hoje é single-project)
+  • Exportação de relatório em PDF com todos os gráficos
+  • Importação de dados de OEE/MES para correlação com análise de ciclo
+  • Modo colaborativo: múltiplos analistas no mesmo projeto (WebSocket)
+  • Histórico de versões do projeto (audit trail)
+  • Comparativo entre dois ciclos diferentes do mesmo processo
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  7. COMO RODAR A APLICAÇÃO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Pré-requisitos:
+    - Python 3.12+
+    - Node.js 18+
+    - Git
+
+  Backend (Terminal 1):
+    cd C:\Users\klj1ct\Desktop\CycleTimeAnalysis
+    backend\.venv\Scripts\activate
+    uvicorn backend.main:app --reload --port 8000
+
+  Frontend (Terminal 2):
+    cd C:\Users\klj1ct\Desktop\CycleTimeAnalysis\frontend
+    npm run dev
+
+  Acesso: http://localhost:5173
+
+  Testes do backend:
+    cd C:\Users\klj1ct\Desktop\CycleTimeAnalysis
+    backend\.venv\Scripts\activate
+    pytest backend/tests/ -v
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  8. ESTRUTURA DE ARQUIVOS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  CycleTimeAnalysis/
+  ├── backend/
+  │   ├── main.py                    ← app factory FastAPI
+  │   ├── config.py                  ← configurações (portas, caminhos)
+  │   ├── requirements.txt           ← dependências Python
+  │   ├── api/routers/
+  │   │   ├── projects.py            ← endpoints de projeto
+  │   │   └── analytics.py           ← endpoints de analytics
+  │   ├── models/
+  │   │   ├── schemas.py             ← modelos Pydantic (Event, Project, etc.)
+  │   │   └── model.py               ← modelo de domínio
+  │   ├── services/
+  │   │   ├── storage_service.py     ← leitura/escrita project.json
+  │   │   └── analytics_service.py   ← cálculos analíticos
+  │   └── tests/
+  │       └── test_analytics_service.py ← 30 testes unitários
+  │
+  ├── frontend/
+  │   ├── src/
+  │   │   ├── App.jsx                ← shell principal + estado global
+  │   │   ├── components/
+  │   │   │   ├── VideoAnalyzer.jsx  ← detecção MediaPipe + ROIs
+  │   │   │   ├── EventEditor.jsx    ← tabela de eventos
+  │   │   │   ├── Dashboard.jsx      ← 8 gráficos Plotly
+  │   │   │   ├── VideoPlayer.jsx    ← player com canvas
+  │   │   │   ├── CameraView.jsx     ← captura webcam
+  │   │   │   └── RoiOverlay.jsx     ← overlay ROIs
+  │   │   └── lib/
+  │   │       ├── api.js             ← cliente HTTP
+  │   │       ├── roiTracker.js      ← lógica ponto-em-polígono
+  │   │       ├── time.js            ← conversão frames/tempo
+  │   │       └── useVideoPreprocess.js ← hook MediaPipe
+  │   └── package.json
+  │
+  ├── data/
+  │   ├── project.json               ← estado persistido do projeto
+  │   └── videos/                    ← vídeos carregados (gitignored)
+  │
+  ├── tools/                         ← ferramentas de IA/treinamento
+  │   ├── extract_frames.py          ← extrai frames de vídeo
+  │   ├── coco_keypoints_to_yolo_pose.py ← converte CVAT → YOLOv8
+  │   ├── validate_onnx.py           ← valida modelo ONNX em imagens
+  │   ├── annotate_video.py          ← gera vídeo anotado com modelo
+  │   ├── check_dataset.py           ← analisa distribuição do dataset
+  │   ├── visualize_pose.py          ← visualizador interativo (requer GUI)
+  │   ├── FASE1_DATASET_TREINO.md    ← guia de treino
+  │   ├── annotations/               ← JSONs COCO exportados do CVAT
+  │   └── model/
+  │       └── robot_arm_modelv2.onnx ← modelo treinado atual
+  │
+  ├── legacy_code/                   ← scripts legados (referência)
+  │   ├── Manual_Processing.py
+  │   └── ProcessTracer_Hands.py
+  │
+  ├── DOCUMENTACAO.txt               ← este arquivo
+  └── .gitignore
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  9. GLOSSÁRIO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  TAV   → Tempo de Agregação de Valor
+          Operação que o cliente reconhece como valor (ex: montagem, solda)
+
+  NNVA  → Necessário mas Não Agrega Valor
+          Desperdício necessário (ex: transporte obrigatório, inspeção regulatória)
+
+  TNAV  → Totalmente Não Agrega Valor
+          Desperdício puro (ex: espera, retrabalho, movimentação desnecessária)
+
+  ROI   → Region of Interest (Região de Interesse)
+          Área poligonal definida no vídeo para detecção de presença da mão/garra
+
+  FPS   → Frames Per Second (Quadros por Segundo)
+          Taxa de captura do vídeo, usada para converter frames em tempo
+
+  Takt Time → Tempo disponível ÷ Demanda do cliente
+              Ritmo necessário para atender a demanda
+
+  mAP50 → Mean Average Precision @ IoU 0.5
+           Métrica de qualidade do modelo de IA (0 a 1, quanto maior melhor)
+
+  ONNX  → Open Neural Network Exchange
+           Formato padrão para exportar modelos de IA para inferência universal
+
+  Keypoint → Ponto articular detectado pelo modelo de pose estimation
+             Ex: base, ombro, cotovelo, pulso, garra do braço robótico
+
+  Fine-tuning → Retreino de um modelo existente com novos dados
+                Mais rápido e eficiente que treinar do zero
+
+================================================================================
+  Documento gerado em: Março 2026
+  Projeto: CycleTimeAnalysis | Autor: João Klippel
+  github.com/JoaoP3dro88/CycleTimeAnalysis
+================================================================================
