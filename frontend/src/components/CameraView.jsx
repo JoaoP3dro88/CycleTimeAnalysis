@@ -49,7 +49,11 @@ function buildProjectEvent(trackerEvent, roi, fps) {
   const frames = Math.max(1, Math.round(duration * fps))
   // Use a virtual start frame anchored to wall-clock seconds since epoch
   // so events are roughly ordered chronologically in the list.
-  const startFrame = Math.round((trackerEvent.timestamp - frames * (1000 / fps)) / (1000 / fps))
+  // trackerEvent.timestamp is set at grace-expiry; the hand was actually last
+  // seen at lostSince, so we anchor startFrame to (timestamp - duration) which
+  // already uses lostSince-based duration (grace-free).
+  const msPerFrame = 1000 / fps
+  const startFrame = Math.round((trackerEvent.timestamp - frames * msPerFrame) / msPerFrame)
   const endFrame = startFrame + frames
 
   const category = hand === 'Left'

@@ -289,14 +289,22 @@ export default forwardRef(function VideoAnalyzer(
       const timeForTracker = frameAdvanced
         ? videoTimeMs
         : videoTimeMs + (nowWall - prevWallMs)
-      const newEvents = trackerRef.current.processFrame(handsDetected, currentRois, timeForTracker)
+      const newEvents = trackerRef.current.processFrame(handsDetected, currentRois, timeForTracker, currentFrame)
       for (const ev of newEvents) {
         if (ev.type === 'EXIT') {
           const roi = currentRois[ev.roiIndex]
           if (!roi) continue
 
-          const endFrame = Math.round(video.currentTime * currentFps)
-          const startFrame = Math.max(0, endFrame - Math.round(ev.duration * currentFps))
+          // Use the precise frames stored by the tracker instead of
+          // back-calculating from ev.duration — this eliminates confirmation
+          // and grace-period bias from the start/end frames.
+          const startFrame = ev.entryFrame != null
+            ? ev.entryFrame
+            : Math.max(0, currentFrame - Math.round(ev.duration * currentFps))
+
+          const endFrame = ev.lostFrame != null
+            ? ev.lostFrame
+            : currentFrame
 
           // Skip if this hand already emitted an event that ends at or after
           // this start_frame — means we've rewound and would create a duplicate.
@@ -308,11 +316,13 @@ export default forwardRef(function VideoAnalyzer(
 
           maxEndFrameRef.current[ev.hand] = endFrame
 
+          const actualDuration = currentFps > 0 ? (endFrame - startFrame) / currentFps : ev.duration
+
           onCreateEventRef.current?.({
             operation: roi.name,
             start_frame: startFrame,
             end_frame: Math.max(startFrame + 1, endFrame),
-            duration: Number(ev.duration.toFixed(6)),
+            duration: Number(actualDuration.toFixed(6)),
             category,
             object: ev.hand === 'Left' ? 'Mão Esquerda' : 'Mão Direita',
             resource: roi.name,

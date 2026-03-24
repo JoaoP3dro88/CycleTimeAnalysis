@@ -2,18 +2,23 @@
  * roiTracker.js
  *
  * Pure logic for ROI entry/exit detection — no React, no DOM.
- * Mirrors the legacy Python VideoProcessor confirmation/grace logic.
  *
- * Constants (same as legacy):
- *   CONFIRMATION_FRAMES = 3   consecutive frames to confirm entry
- *   GRACE_FRAMES        = 10  frames of hand absence before confirming exit
+ * Constants:
+ *   CONFIRMATION_FRAMES = 1   consecutive frames to confirm entry (was 3 — reduces entry delay)
+ *   GRACE_FRAMES        = 3   frames of hand absence before confirming exit (was 10)
+ *   GRACE_MS            = 80  ms of video-time before confirming exit (was 333ms ≈ 10 frames)
+ *
+ * Delay analysis (previous values → current):
+ *   Entry delay:  3 frames → 1 frame  (~66ms at 30fps saved)
+ *   Exit  delay:  333ms    → 80ms     (~253ms saved, ~2-3 frames at 30fps)
+ *   startFrame is now stored at ENTRY time (not back-calculated from duration)
+ *   endFrame   is corrected to exclude the grace period
  */
 
-export const CONFIRMATION_FRAMES = 3
-export const GRACE_FRAMES = 10
+export const CONFIRMATION_FRAMES = 1
+export const GRACE_FRAMES = 3
 // Grace period in ms — used when a video-time timestamp is provided.
-// 333ms of video-time before confirming exit (≈10 frames at 30fps).
-export const GRACE_MS = 333
+export const GRACE_MS = 80
 
 /**
  * Point-in-polygon test (ray casting) for normalised [0,1] coords.
@@ -62,6 +67,7 @@ function makeHandState() {
     lostFrames: 0,         // consecutive frames where hand was absent
     lostSince: null,       // timestamp (ms) when hand was first lost
     entryTime: null,       // timestamp (ms) when hand entered currentRoi
+    entryFrame: null,      // frame number when hand entered currentRoi (precise start)
   }
 }
 
@@ -96,9 +102,12 @@ export class RoiTracker {
    * @param {number} [nowOverride]  Optional timestamp in ms to use instead of Date.now().
    *   Pass video.currentTime * 1000 when processing video frames so duration
    *   is in video-time seconds (correct at any playback speed).
+   * @param {number} [currentFrame]  Current video frame number. When provided,
+   *   is stored at entry and returned in EXIT events as entryFrame/exitFrame
+   *   so the caller can build exact start_frame/end_frame without back-calculating.
    * @returns {Array}  New events produced this frame
    */
-  processFrame(handsDetected, rois, nowOverride) {
+  processFrame(handsDetected, rois, nowOverride, currentFrame) {
     const now = nowOverride ?? Date.now()
     const newEvents = []
 
@@ -112,29 +121,36 @@ export class RoiTracker {
         buf.lostFrames++
         if (buf.lostSince === null) buf.lostSince = now
 
-        // Use time-based grace when nowOverride is provided (video mode),
-        // frame-based grace otherwise (camera mode uses Date.now() ms too,
-        // so we can use the same GRACE_MS branch always).
         const graceExpired = (now - buf.lostSince) > GRACE_MS
 
         if (graceExpired && buf.currentRoi !== null) {
-          // Grace period expired → confirm exit
-          const duration = (now - buf.entryTime) / 1000
+          // Grace period expired → confirm exit.
+          // Duration = time from entry to when hand was FIRST lost (lostSince),
+          // NOT to now — this removes the grace-period inflation from the duration.
+          const exitTime = buf.lostSince   // hand was last seen at this time
+          const duration = (exitTime - buf.entryTime) / 1000
           const ev = {
             type: 'EXIT',
             hand: handLabel,
             roiIndex: buf.currentRoi,
             roiName: rois[buf.currentRoi]?.name ?? `ROI ${buf.currentRoi}`,
-            duration,
+            duration: Math.max(0, duration),
             timestamp: now,
+            entryFrame: buf.entryFrame,   // exact frame when entry was confirmed
+            lostFrame: buf.lostFrame,     // exact frame when hand was first lost
           }
           newEvents.push(ev)
           this.eventLog.push(ev)
           buf.currentRoi = null
           buf.entryTime = null
+          buf.entryFrame = null
           buf.lostSince = null
+          buf.lostFrame = null
           buf.lostFrames = 0
           buf.buffer = []
+        } else if (buf.lostFrame == null && currentFrame != null) {
+          // Record the first frame the hand went missing (for end_frame correction)
+          buf.lostFrame = currentFrame
         }
         continue
       }
@@ -142,6 +158,7 @@ export class RoiTracker {
       // ── Hand detected ────────────────────────────────────────────────────
       buf.lostFrames = 0
       buf.lostSince = null
+      buf.lostFrame = null
 
       // Changed ROI (including moving to null = outside all ROIs)
       if (buf.currentRoi !== null && buf.currentRoi !== detectedRoi) {
@@ -154,19 +171,23 @@ export class RoiTracker {
             roiName: rois[buf.currentRoi]?.name ?? `ROI ${buf.currentRoi}`,
             duration,
             timestamp: now,
+            entryFrame: buf.entryFrame,
+            lostFrame: currentFrame ?? null,
           }
           newEvents.push(ev)
           this.eventLog.push(ev)
         }
         buf.currentRoi = null
         buf.entryTime = null
+        buf.entryFrame = null
         buf.lostSince = null
+        buf.lostFrame = null
         buf.buffer = []
       }
 
       // Accumulate entry confirmation
       if (detectedRoi !== null && buf.currentRoi === null) {
-        buf.buffer.push(detectedRoi)
+        buf.buffer.push({ roi: detectedRoi, frame: currentFrame ?? null })
 
         // Keep only the last N frames
         if (buf.buffer.length > CONFIRMATION_FRAMES * 3) {
@@ -175,11 +196,15 @@ export class RoiTracker {
 
         // Count consecutive matching entries at the tail
         const tail = buf.buffer.slice(-CONFIRMATION_FRAMES)
-        const confirmed = tail.length === CONFIRMATION_FRAMES && tail.every((v) => v === detectedRoi)
+        const confirmed = tail.length === CONFIRMATION_FRAMES && tail.every((v) => v.roi === detectedRoi)
 
         if (confirmed) {
           buf.currentRoi = detectedRoi
           buf.entryTime = now
+          // Use the frame of the FIRST entry in the confirmation window
+          // so start_frame points to when the hand actually entered, not
+          // when confirmation was achieved.
+          buf.entryFrame = tail[0].frame
           buf.buffer = []
 
           const ev = {
@@ -188,6 +213,7 @@ export class RoiTracker {
             roiIndex: detectedRoi,
             roiName: rois[detectedRoi]?.name ?? `ROI ${detectedRoi}`,
             timestamp: now,
+            entryFrame: buf.entryFrame,
           }
           newEvents.push(ev)
           this.eventLog.push(ev)
