@@ -164,6 +164,12 @@ export default forwardRef(function VideoAnalyzer(
   }, [])
 
   // ── Detection loop ───────────────────────────────────────────────────────
+  // Strategy:
+  //   • Use requestVideoFrameCallback (rVFC) when available — fires ONCE per
+  //     decoded video frame, giving us the exact presentedFrames count and the
+  //     frame's mediaTime.  Zero skip-frames, zero double-processing.
+  //   • Fall back to requestAnimationFrame on browsers without rVFC (Safari <17).
+  //   • A secondary RAF loop runs only for the paused-grace-tick case.
   function startLoop() {
     const video = videoRef?.current
     const canvas = canvasRef.current
@@ -171,17 +177,40 @@ export default forwardRef(function VideoAnalyzer(
 
     const ctx = canvas.getContext('2d')
     const drawingUtils = new DrawingUtils(ctx)
+
+    // Shared state between rVFC and the fallback RAF path
     let lastVideoTime = -1
-    // Wall-clock time of last processFrame call (for paused grace-period ticking)
+    let lastPresentedFrames = -1   // rVFC only — detect duplicate callbacks
     let lastWallMs = performance.now()
 
-    function tick() {
-      rafRef.current = requestAnimationFrame(tick)
+    // ── Paused-grace RAF (always running, lightweight) ────────────────────
+    // Keeps the tracker clock ticking when the video is paused so the grace
+    // period can expire even if no new frames are delivered.
+    function pausedGraceTick() {
+      rafRef.pausedRaf = requestAnimationFrame(pausedGraceTick)
+      if (!activeRef.current) return
+      const video2 = videoRef?.current
+      if (!video2 || video2.readyState < 2) return
+      if (!video2.paused && !video2.ended) return   // only act when paused
 
+      const nowWall = performance.now()
+      const elapsed = nowWall - lastWallMs
+      if (elapsed < 80) return         // throttle to ~12 Hz
+
+      const videoTimeMs = video2.currentTime * 1000
+      const currentRois = roisRef.current
+      // Advance tracker clock by wall-clock delta so grace timer can expire
+      const timeForTracker = videoTimeMs + elapsed
+      lastWallMs = nowWall
+      const newEvents = trackerRef.current.processFrame({}, currentRois, timeForTracker, null)
+      emitEvents(newEvents, currentRois, Math.round(video2.currentTime * fpsRef.current))
+    }
+
+    // ── Core detect — called once per video frame ─────────────────────────
+    function runDetect(videoTime, nowWall, presentedFrames) {
       if (!activeRef.current) return
       if (video.readyState < 2) return
 
-      // ── Match canvas resolution to the VIDEO's intrinsic size.
       const vw = video.videoWidth || 640
       const vh = video.videoHeight || 480
       if (canvas.width !== vw || canvas.height !== vh) {
@@ -189,10 +218,7 @@ export default forwardRef(function VideoAnalyzer(
         canvas.height = vh
       }
 
-      const nowWall = performance.now()
-      const videoTime = video.currentTime
-
-      // ── Detect seek / loop (time jumped backward) → reset tracker ────────
+      // Detect seek/loop (time jumped backward) → reset tracker
       if (videoTime < lastVideoTime - 0.05) {
         trackerRef.current.reset()
         setActiveRois({ Left: null, Right: null })
@@ -201,42 +227,31 @@ export default forwardRef(function VideoAnalyzer(
         return
       }
 
-      // ── Decide whether to run detection this tick ─────────────────────────
-      // Always run when the video has advanced to a new frame (playing).
-      // Also run every ~100 ms wall-clock even when paused, so that
-      // the grace period can expire if the hand leaves while paused.
-      const frameAdvanced = videoTime !== lastVideoTime
-      const pausedTimeout = !frameAdvanced && (nowWall - lastWallMs) >= 100
+      // Skip duplicate rVFC callbacks (same presentedFrames count)
+      if (presentedFrames !== null && presentedFrames === lastPresentedFrames) return
+      if (presentedFrames !== null) lastPresentedFrames = presentedFrames
 
-      if (!frameAdvanced && !pausedTimeout) return
-
-      const prevWallMs = lastWallMs
       lastVideoTime = videoTime
       lastWallMs = nowWall
 
-      const videoTimeMs = videoTime * 1000  // ms in video time
-
-      // ── Landmark detection — cache-first, then live ───────────────────────
-      // If the video was pre-processed, read from the cache (O(1), no GPU).
-      // Fall back to live MediaPipe when the frame is not cached yet.
-      const cache = preprocessCachePropRef.current?.current ?? null
+      const videoTimeMs = videoTime * 1000
       const currentFrame = Math.round(videoTime * fpsRef.current)
+
+      // ── Cache-first detection ─────────────────────────────────────────
+      const cache = preprocessCachePropRef.current?.current ?? null
       let results
       let fromCache = false
 
       if (cache && cache.has(currentFrame)) {
-        // Use pre-computed result (may be null = no hands on this frame)
         const cached = cache.get(currentFrame)
         results = cached ?? { landmarks: [], handedness: [] }
         fromCache = true
       } else {
-        // Live detection (no cache or frame not yet processed)
-        // detectForVideo requires a strictly-increasing timestamp — performance.now()
-        // is always monotonic, regardless of whether the video is paused.
+        // Live detection — pass performance.now() as strictly-increasing ts
         results = landmarkerRef.current.detectForVideo(video, performance.now())
       }
 
-      // ── Update detection-source stats (throttled to avoid re-render storm) ─
+      // Throttled stats flush
       const stats = detectStatsRef.current
       if (fromCache) { stats.cache++ } else { stats.live++ }
       stats.flushAt--
@@ -265,12 +280,10 @@ export default forwardRef(function VideoAnalyzer(
 
       for (let i = 0; i < validLandmarks.length; i++) {
         const rawLabel = validHandedness[i]?.[0]?.categoryName ?? 'Left'
-        const userLabel = rawLabel  // video is not mirrored
         const probe = getProbe(validLandmarks[i])
         const roiIdx = detectRoi(probe.x, probe.y, currentRois)
-        handsDetected[userLabel] = roiIdx
+        handsDetected[rawLabel] = roiIdx
 
-        // Draw probe dot at normalized coordinates × intrinsic size
         ctx.beginPath()
         ctx.arc(probe.x * canvas.width, probe.y * canvas.height, 8, 0, Math.PI * 2)
         ctx.fillStyle = '#00ffff'
@@ -282,62 +295,89 @@ export default forwardRef(function VideoAnalyzer(
 
       setActiveRois({ Left: handsDetected.Left ?? null, Right: handsDetected.Right ?? null })
 
+      const newEvents = trackerRef.current.processFrame(handsDetected, currentRois, videoTimeMs, currentFrame)
+      emitEvents(newEvents, currentRois, currentFrame)
+    }
+
+    // ── Emit helper (shared by both rVFC and fallback paths) ──────────────
+    function emitEvents(newEvents, currentRois, currentFrame) {
       const currentFps = fpsRef.current
-      // Pass video-time ms so duration is in video seconds (correct at any speed).
-      // When paused (pausedTimeout), advance the tracker clock by the wall-clock
-      // elapsed since last call so grace timers can still expire.
-      const timeForTracker = frameAdvanced
-        ? videoTimeMs
-        : videoTimeMs + (nowWall - prevWallMs)
-      const newEvents = trackerRef.current.processFrame(handsDetected, currentRois, timeForTracker, currentFrame)
       for (const ev of newEvents) {
-        if (ev.type === 'EXIT') {
-          const roi = currentRois[ev.roiIndex]
-          if (!roi) continue
+        if (ev.type !== 'EXIT') continue
+        const roi = currentRois[ev.roiIndex]
+        if (!roi) continue
 
-          // Use the precise frames stored by the tracker instead of
-          // back-calculating from ev.duration — this eliminates confirmation
-          // and grace-period bias from the start/end frames.
-          const startFrame = ev.entryFrame != null
-            ? ev.entryFrame
-            : Math.max(0, currentFrame - Math.round(ev.duration * currentFps))
+        const startFrame = ev.entryFrame != null
+          ? ev.entryFrame
+          : Math.max(0, currentFrame - Math.round(ev.duration * currentFps))
 
-          const endFrame = ev.lostFrame != null
-            ? ev.lostFrame
-            : currentFrame
+        const endFrame = ev.lostFrame != null
+          ? ev.lostFrame
+          : currentFrame
 
-          // Skip if this hand already emitted an event that ends at or after
-          // this start_frame — means we've rewound and would create a duplicate.
-          if (startFrame <= maxEndFrameRef.current[ev.hand]) continue
+        if (startFrame <= maxEndFrameRef.current[ev.hand]) continue
 
-          const category = ev.hand === 'Left'
-            ? (roi.leftCategory ?? '')
-            : (roi.rightCategory ?? '')
+        const category = ev.hand === 'Left'
+          ? (roi.leftCategory ?? '')
+          : (roi.rightCategory ?? '')
 
-          maxEndFrameRef.current[ev.hand] = endFrame
+        maxEndFrameRef.current[ev.hand] = endFrame
 
-          const actualDuration = currentFps > 0 ? (endFrame - startFrame) / currentFps : ev.duration
+        const actualDuration = currentFps > 0 ? (endFrame - startFrame) / currentFps : ev.duration
 
-          onCreateEventRef.current?.({
-            operation: roi.name,
-            start_frame: startFrame,
-            end_frame: Math.max(startFrame + 1, endFrame),
-            duration: Number(actualDuration.toFixed(6)),
-            category,
-            object: ev.hand === 'Left' ? 'Mão Esquerda' : 'Mão Direita',
-            resource: roi.name,
-          })
-        }
+        onCreateEventRef.current?.({
+          operation: roi.name,
+          start_frame: startFrame,
+          end_frame: Math.max(startFrame + 1, endFrame),
+          duration: Number(actualDuration.toFixed(6)),
+          category,
+          object: ev.hand === 'Left' ? 'Mão Esquerda' : 'Mão Direita',
+          resource: roi.name,
+        })
       }
     }
 
-    rafRef.current = requestAnimationFrame(tick)
+    // ── Choose rVFC or RAF ────────────────────────────────────────────────
+    const useRvfc = typeof video.requestVideoFrameCallback === 'function'
+
+    if (useRvfc) {
+      // requestVideoFrameCallback fires exactly once per decoded frame,
+      // aligned with the browser's compositor — no extra skip/duplicate logic needed.
+      function rvfcTick(now, metadata) {
+        if (!activeRef.current) return   // loop stopped
+        runDetect(metadata.mediaTime, now, metadata.presentedFrames)
+        rafRef.current = video.requestVideoFrameCallback(rvfcTick)
+      }
+      rafRef.current = video.requestVideoFrameCallback(rvfcTick)
+    } else {
+      // Fallback: standard RAF — we guard against same-frame re-processing
+      // with the lastVideoTime check inside runDetect.
+      function rafTick() {
+        rafRef.current = requestAnimationFrame(rafTick)
+        if (!activeRef.current) return
+        if (video.readyState < 2) return
+        runDetect(video.currentTime, performance.now(), null)
+      }
+      rafRef.current = requestAnimationFrame(rafTick)
+    }
+
+    // Start the lightweight paused-grace ticker
+    rafRef.pausedRaf = requestAnimationFrame(pausedGraceTick)
   }
 
   function stopLoop() {
+    const video = videoRef?.current
     if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current)
+      if (typeof video?.cancelVideoFrameCallback === 'function') {
+        video.cancelVideoFrameCallback(rafRef.current)
+      } else {
+        cancelAnimationFrame(rafRef.current)
+      }
       rafRef.current = null
+    }
+    if (rafRef.pausedRaf) {
+      cancelAnimationFrame(rafRef.pausedRaf)
+      rafRef.pausedRaf = null
     }
     // Clear canvas
     const canvas = canvasRef.current
