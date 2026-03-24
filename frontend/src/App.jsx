@@ -2,9 +2,9 @@ import './App.css'
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import {
-  Timer, FolderOpen, Download, Camera, Upload,
-  Settings, Trash2, BarChart2, X,
-  CheckCircle, AlertTriangle, Cpu,
+  Timer, FolderOpen, Download, Camera, Save, FilePlus,
+  Settings, BarChart2, X,
+  CheckCircle, AlertTriangle,
 } from 'lucide-react'
 import EventEditor from './components/EventEditor'
 import VideoPlayer, { VideoCanvas } from './components/VideoPlayer'
@@ -42,7 +42,8 @@ function App() {
   const [analytics,  setAnalytics]  = useState(null)
   const [error,      setError]      = useState('')
   const [busy,       setBusy]       = useState(false)
-  const [initDone,   setInitDone]   = useState(false)   // first load complete
+  const [unsaved,    setUnsaved]    = useState(false)
+  const [projectFileName, setProjectFileName] = useState(null)
   const [pendingStartFrame, setPendingStartFrame] = useState(null)
   const [loopIndex,  setLoopIndex]  = useState(-1)
   const [loopRange,  setLoopRange]  = useState({ active: false, startFrame: 0, endFrame: 0 })
@@ -90,119 +91,99 @@ function App() {
     if (preprocessStatus === 'processing') setPreprocessToast(null)
   }, [preprocessStatus])
 
-  async function refreshAll() {
-    setBusy(true)
-    setError('')
+  async function refreshAnalytics(p) {
     try {
-      const p = await apiGet('/api/projects/current')
-      setProject(p)
-      // Restore persisted ROIs into the VideoAnalyzer
-      if (Array.isArray(p?.rois) && p.rois.length > 0) {
-        setImportedRois(p.rois)
-      }
+      await apiPost('/api/projects/import', p)
       const a = await apiGet('/api/analytics/current')
       setAnalytics(a)
-    } catch (e) {
-      setError(e.message ?? String(e))
-    } finally {
-      setBusy(false)
-      setInitDone(true)
-    }
+    } catch { /* non-fatal */ }
   }
 
+  function updateProject(nextProject) {
+    setProject(nextProject)
+    setUnsaved(true)
+    refreshAnalytics(nextProject)
+  }
+
+  // Kept for legacy call-sites inside event handlers
   async function saveProject(nextProject) {
-    // Persist whole project (simple and reliable for now)
-    const saved = await apiPost('/api/projects/import', nextProject)
-    setProject(saved)
-    const a = await apiGet('/api/analytics/current')
-    setAnalytics(a)
+    updateProject(nextProject)
+    return nextProject
   }
 
-  useEffect(() => {
-    // Load whatever project exists in the backend — don't reset on open.
-    // The user can reset manually via the "Resetar" button.
-    refreshAll()
-  }, [])
+  // App starts empty — no auto-load
+  useEffect(() => {}, [])
 
-  async function onResetProject() {
-    if (!window.confirm('Zerar o projecto apaga todos os eventos. Continuar?')) return
+  function onNewProject() {
+    if (unsaved && !window.confirm('Há alterações não salvas. Criar novo projeto vai descartá-las. Continuar?')) return
+    setProject(null)
+    setAnalytics(null)
+    setVideoSrc('')
+    videoStateRef.current.src = ''
+    setLoopRange({ active: false, startFrame: 0, endFrame: 0 })
+    setPendingStartFrame(null)
+    setLoopIndex(-1)
+    setImportedRois(null)
+    setMetaFps(30)
+    setMetaTakt(10)
+    setUnsaved(false)
+    setProjectFileName(null)
+    setError('')
+  }
+
+  async function onOpenProject(ev) {
+    const file = ev.target.files?.[0]
+    if (!file) return
+    if (unsaved && !window.confirm('Há alterações não salvas. Abrir outro projeto vai descartá-las. Continuar?')) {
+      ev.target.value = ''; return
+    }
     setBusy(true)
     setError('')
     try {
-      await apiPost('/api/projects/reset', {})
-      await refreshAll()
+      const parsed = JSON.parse(await file.text())
+
+      setVideoSrc('')
+      videoStateRef.current.src = ''
       setLoopRange({ active: false, startFrame: 0, endFrame: 0 })
       setPendingStartFrame(null)
       setLoopIndex(-1)
-    } catch (e) {
-      setError(e.message ?? String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
 
-  async function onImportJsonFile(ev) {
-    const file = ev.target.files?.[0]
-    if (!file) return
+      setProject(parsed)
+      setProjectFileName(file.name)
+      setUnsaved(false)
+      setMetaFps(parsed.meta?.fps ?? 30)
+      setMetaTakt(parsed.meta?.takt_time ?? 10)
+      setImportedRois(Array.isArray(parsed.rois) && parsed.rois.length > 0 ? parsed.rois : null)
 
-    setBusy(true)
-    setError('')
-    try {
-      const text = await file.text()
-      const parsed = JSON.parse(text)
-      await saveProject(parsed)
+      await refreshAnalytics(parsed)
 
-      // ── Restore ROIs ─────────────────────────────────────────────────────
-      if (Array.isArray(parsed.rois) && parsed.rois.length > 0) {
-        setImportedRois(parsed.rois)
-      }
-
-      // ── Try to auto-load the video ────────────────────────────────────────
-      const videoPath     = parsed.meta?.video_path      // absolute path on this machine
-      const videoFilename = parsed.meta?.video_filename  // basename fallback
-
+      // Tenta recarregar o vídeo automaticamente
+      const videoPath     = parsed.meta?.video_path
+      const videoFilename = parsed.meta?.video_filename
       if (videoPath || videoFilename) {
         let loaded = false
-
-        // 1st try: serve directly from absolute path (works when the file is
-        //          still on the same machine where it was originally loaded).
         if (videoPath) {
           try {
             const testUrl = `/api/projects/video-by-path?path=${encodeURIComponent(videoPath)}`
-            const res = await fetch(testUrl, { method: 'HEAD' })
-            if (res.ok) {
+            if ((await fetch(testUrl, { method: 'HEAD' })).ok) {
               videoStateRef.current.src = testUrl
               setVideoSrc(testUrl)
-              setLoopRange({ active: false, startFrame: 0, endFrame: 0 })
-              setPendingStartFrame(null)
-              setLoopIndex(-1)
               loaded = true
             }
           } catch { /* fall through */ }
         }
-
-        // 2nd try: look in data/videos/ by filename (file was uploaded before)
         if (!loaded && videoFilename) {
           try {
-            const videos = await apiGet('/api/projects/videos')
-            const match = videos.find((v) => v.name === videoFilename)
+            const match = (await apiGet('/api/projects/videos')).find(v => v.name === videoFilename)
             if (match) {
               videoStateRef.current.src = match.url
               setVideoSrc(match.url)
-              setLoopRange({ active: false, startFrame: 0, endFrame: 0 })
-              setPendingStartFrame(null)
-              setLoopIndex(-1)
               loaded = true
             }
           } catch { /* fall through */ }
         }
-
-        // Nothing worked — ask the user to locate the file manually
         if (!loaded) {
-          setError(
-            `Vídeo "${videoFilename ?? videoPath}" não encontrado.\n` +
-            `Carregue o vídeo manualmente usando o botão "Carregar vídeo".`
-          )
+          setError(`Vídeo "${videoFilename ?? videoPath}" não encontrado.\nCarregue o vídeo manualmente.`)
         }
       }
     } catch (e) {
@@ -213,22 +194,22 @@ function App() {
     }
   }
 
-  async function onExportJson() {
+  async function onSaveProject() {
     setBusy(true)
     setError('')
     try {
-      // Grab current ROIs from the analyzer and persist them first
       const currentRois = analyzerRef.current?.getRois?.() ?? []
-      const baseProject = project ?? { meta: { fps: metaFps, total_frames: 0, takt_time: metaTakt }, events: [] }
-      const withRois = { ...baseProject, rois: currentRois }
-      await saveProject(withRois)
-
-      const p = await apiGet('/api/projects/export')
-      const blob = new Blob([JSON.stringify(p, null, 2)], { type: 'application/json' })
+      const base = project ?? { meta: { fps: metaFps, total_frames: 0, takt_time: metaTakt }, events: [] }
+      const toSave = { ...base, rois: currentRois }
+      const blob = new Blob([JSON.stringify(toSave, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
-      a.href = url; a.download = 'project.json'; a.click()
+      a.href = url
+      a.download = projectFileName ?? 'projeto.cta.json'
+      a.click()
       URL.revokeObjectURL(url)
+      setProject(toSave)
+      setUnsaved(false)
     } catch (e) {
       setError(e.message ?? String(e))
     } finally {
@@ -236,16 +217,14 @@ function App() {
     }
   }
 
-  // Upload video to backend + persist fps / total_frames / video_path in meta.
-  // Called after the video metadata is probed so we have the real values.
+  // Upload video to backend (for future re-opens), but keep the blob: URL
+  // active for this session — do NOT switch videoSrc to the backend URL.
   function persistVideoMeta(blobUrl, file, detectedFps, totalFrames) {
     const formData = new FormData()
     formData.append('file', file)
     fetch('/api/projects/videos/upload', { method: 'POST', body: formData })
       .then((r) => r.ok ? r.json() : null)
       .then((result) => {
-        // Use a fresh snapshot of project state via the setter callback so we
-        // never close over a stale `project` value (the upload is async).
         setProject((prev) => {
           const base = prev ?? { meta: { fps: detectedFps, total_frames: totalFrames, takt_time: metaTakt }, events: [], rois: [] }
           const nextProject = {
@@ -258,21 +237,20 @@ function App() {
               ...(result ? { video_filename: result.name, video_path: result.absolute_path } : {}),
             },
           }
-          saveProject(nextProject).catch(() => {})
+          refreshAnalytics(nextProject)
           return nextProject
         })
+        setUnsaved(true)
+        // blob: URL stays in videoSrc — no setVideoSrc() call here
       })
       .catch(() => {
-        // Upload failed (non-fatal) — still update fps/total_frames locally
         setProject((prev) => {
           const base = prev ?? { meta: { fps: detectedFps, total_frames: totalFrames, takt_time: metaTakt }, events: [], rois: [] }
-          const nextProject = {
-            ...base,
-            meta: { ...base.meta, fps: detectedFps, total_frames: totalFrames },
-          }
-          saveProject(nextProject).catch(() => {})
+          const nextProject = { ...base, meta: { ...base.meta, fps: detectedFps, total_frames: totalFrames } }
+          refreshAnalytics(nextProject)
           return nextProject
         })
+        setUnsaved(true)
       })
   }
 
@@ -284,8 +262,7 @@ function App() {
     if (patch.takt !== undefined) setMetaTakt(newTakt)
     const base = project ?? { meta: { fps: newFps, total_frames: 0, takt_time: newTakt }, events: [] }
     const next = { ...base, meta: { ...base.meta, fps: newFps, takt_time: newTakt } }
-    setProject(next)
-    saveProject(next).catch((e) => setError(e.message ?? String(e)))
+    updateProject(next)
   }, [project, metaFps, metaTakt]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── shared input style (used in settings panel) ──────────────────────────
@@ -309,12 +286,23 @@ function App() {
           <h1 style={{ margin: 0, fontSize: '1.05rem', lineHeight: 1.2, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <Timer size={16} strokeWidth={2} /> Cycle Time Analysis
           </h1>
-          {!initDone && <span style={{ fontSize: '0.72rem', color: '#666' }}>Carregando…</span>}
-          {initDone && busy && <span style={{ fontSize: '0.72rem', color: '#666' }}>Salvando…</span>}
+          {busy && <span style={{ fontSize: '0.72rem', color: '#666' }}>Processando…</span>}
+          {!busy && unsaved && <span style={{ fontSize: '0.72rem', color: '#c8a02a' }}>● Não salvo</span>}
+          {!busy && !unsaved && projectFileName && <span style={{ fontSize: '0.72rem', color: '#666' }}>{projectFileName}</span>}
         </div>
 
         {/* Center: file / input actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <button style={{ ...hBtn(), display: "flex", alignItems: "center", gap: "0.35rem" }} onClick={onNewProject}>
+            <FilePlus size={14} strokeWidth={2} /> Novo
+          </button>
+          <label style={{ ...hBtn(), display: "flex", alignItems: "center", gap: "0.35rem" }}>
+            <FolderOpen size={14} strokeWidth={2} /> Abrir projeto
+            <input type="file" accept="application/json,.cta.json" onChange={onOpenProject} style={{ display: 'none' }} />
+          </label>
+          <button style={{ ...hBtn(), display: "flex", alignItems: "center", gap: "0.35rem" }} onClick={onSaveProject} disabled={busy}>
+            <Save size={14} strokeWidth={2} /> {unsaved ? 'Salvar *' : 'Salvar'}
+          </button>
           <label style={{ ...hBtn(), display: "flex", alignItems: "center", gap: "0.35rem" }}>
             <FolderOpen size={14} strokeWidth={2} /> Carregar vídeo
             <input
@@ -333,10 +321,6 @@ function App() {
                 setError('')
                 e.target.value = ''
 
-                // ── Read FPS and total_frames from the video metadata ─────────
-                // We create a temporary <video> element to probe duration.
-                // FPS is estimated via requestVideoFrameCallback when available,
-                // otherwise we keep the current metaFps value.
                 const probeVideo = document.createElement('video')
                 probeVideo.src = url
                 probeVideo.muted = true
@@ -345,12 +329,10 @@ function App() {
                 probeVideo.addEventListener('loadedmetadata', () => {
                   const duration = probeVideo.duration || 0
 
-                  // Estimate FPS using requestVideoFrameCallback (gives real frame count).
-                  // If not supported, fall back to the current metaFps setting.
                   if (typeof probeVideo.requestVideoFrameCallback === 'function') {
                     let frameCount = 0
                     let startTime = null
-                    const sampleDuration = Math.min(2, duration) // sample up to 2 s
+                    const sampleDuration = Math.min(2, duration)
 
                     const tick = (_now, meta) => {
                       if (startTime === null) startTime = meta.mediaTime
@@ -370,7 +352,6 @@ function App() {
                     probeVideo.requestVideoFrameCallback(tick)
                     probeVideo.play().catch(() => {})
                   } else {
-                    // No rVFC support — use current FPS, compute total_frames from duration
                     const totalFrames = Math.round(duration * metaFps)
                     persistVideoMeta(url, file, metaFps, totalFrames)
                   }
@@ -379,10 +360,6 @@ function App() {
               style={{ display: 'none' }}
             />
           </label>
-          <label style={{ ...hBtn(), display: "flex", alignItems: "center", gap: "0.35rem" }}>
-            <Download size={14} strokeWidth={2} /> Importar JSON
-            <input type="file" accept="application/json" onChange={onImportJsonFile} style={{ display: 'none' }} />
-          </label>
           <button style={{ ...hBtn(cameraMode), display: "flex", alignItems: "center", gap: "0.35rem" }} onClick={() => setCameraMode((v) => !v)}>
             <Camera size={14} strokeWidth={2} /> {cameraMode ? 'Fechar câmera' : 'Câmera'}
           </button>
@@ -390,14 +367,8 @@ function App() {
 
         {/* Right: project actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-          <button style={{ ...hBtn(), display: "flex", alignItems: "center", gap: "0.35rem" }} onClick={onExportJson} disabled={busy}>
-            <Upload size={14} strokeWidth={2} /> Exportar
-          </button>
           <button style={{ ...hBtn(showSettings), display: "flex", alignItems: "center", gap: "0.35rem" }} onClick={() => setShowSettings((v) => !v)}>
             <Settings size={14} strokeWidth={2} /> Config
-          </button>
-          <button style={{ ...hBtn(false, true), display: "flex", alignItems: "center", gap: "0.35rem" }} onClick={onResetProject} disabled={busy}>
-            <Trash2 size={14} strokeWidth={2} /> Resetar
           </button>
           <button style={{ ...hBtn(activeTab === 'dashboard'), display: "flex", alignItems: "center", gap: "0.35rem" }} onClick={() => setActiveTab((t) => (t === 'dashboard' ? 'editor' : 'dashboard'))}>
             <BarChart2 size={14} strokeWidth={2} /> Dashboard
@@ -443,7 +414,7 @@ function App() {
       {videoSrc && preprocessStatus === 'processing' && (
         <div style={{ margin: '0 0.75rem 0.2rem', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#888' }}>
-            <span style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}><Cpu size={13} strokeWidth={2} /> Pré-processando com MediaPipe…</span>
+            <span style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>⏳ Pré-processando com MediaPipe…</span>
             <span>{Math.round(preprocessProgress * 100)}%</span>
           </div>
           <div style={{ height: '3px', borderRadius: '2px', background: '#222', overflow: 'hidden' }}>
@@ -539,12 +510,7 @@ function App() {
                     },
                     events: nextEvents,
                   }
-
-                  setProject(nextProject)
-                  setBusy(true)
-                  saveProject(nextProject)
-                    .catch((e) => setError(e.message ?? String(e)))
-                    .finally(() => setBusy(false))
+                  updateProject(nextProject)
                 }}
                 onCreateFromRange={(startFrame, endFrame) => {
                   const duration = fps > 0 ? (endFrame - startFrame) / fps : 0
@@ -565,10 +531,7 @@ function App() {
                     },
                     events: [...(project?.events ?? []), newEvent],
                   }
-                  setBusy(true)
-                  saveProject(nextProject)
-                    .catch((e) => setError(e.message ?? String(e)))
-                    .finally(() => setBusy(false))
+                  updateProject(nextProject)
                 }}
               />
             </div>
@@ -611,10 +574,7 @@ function App() {
                         ...currentProject,
                         events: [...(currentProject.events ?? []), newEvent],
                       }
-                      setBusy(true)
-                      saveProject(nextProject)
-                        .catch((e) => setError(e.message ?? String(e)))
-                        .finally(() => setBusy(false))
+                      updateProject(nextProject)
                     }}
                   />
                 ) : (
@@ -636,13 +596,11 @@ function App() {
                         preprocessCache={preprocessCacheRef}
                         initialRois={importedRois}
                         onRoisChange={(nextRois) => {
-                          // Auto-persist ROIs whenever the user draws/edits/removes them
                           setProject((prev) => {
                             const base = prev ?? { meta: { fps, total_frames: 0, takt_time: metaTakt }, events: [], rois: [] }
-                            const nextProject = { ...base, rois: nextRois }
-                            saveProject(nextProject).catch((e) => setError(e.message ?? String(e)))
-                            return nextProject
+                            return { ...base, rois: nextRois }
                           })
+                          setUnsaved(true)
                         }}
                         onCreateEvent={(newEvent) => {
                           const currentProject = project ?? {
@@ -653,10 +611,7 @@ function App() {
                             ...currentProject,
                             events: [...(currentProject.events ?? []), newEvent],
                           }
-                          setBusy(true)
-                          saveProject(nextProject)
-                            .catch((e) => setError(e.message ?? String(e)))
-                            .finally(() => setBusy(false))
+                          updateProject(nextProject)
                         }}
                       />
                     </div>
@@ -744,10 +699,7 @@ function App() {
                       events: [...(project?.events ?? []), newEvent],
                     }
 
-                    setBusy(true)
-                    saveProject(nextProject)
-                      .catch((e) => setError(e.message ?? String(e)))
-                      .finally(() => setBusy(false))
+                    updateProject(nextProject)
                   }}
                 />
               </div>
