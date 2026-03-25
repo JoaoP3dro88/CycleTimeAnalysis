@@ -1,35 +1,38 @@
 /**
  * VideoAnalyzer.jsx
  *
- * Pure overlay: renders as position:absolute inset:0 over the video element.
- * Contains:
- *   - A <canvas> for landmark drawing (inset:0, pointer-events:none)
- *   - RoiOverlay SVG (inset:0)
- *   - A floating toolbar pinned to top-left (pointer-events:auto)
+ * Overlay sobre o vídeo. A cada frame entregue pelo browser via
+ * requestVideoFrameCallback (rVFC), lê os landmarks do cache
+ * (pré-processado por useVideoPreprocess) e os desenha no canvas.
  *
- * Props:
- *   videoRef        React ref — the SAME <video> element used by VideoPlayer
- *   src             string    — current video src
- *   fps             number    — project FPS (used for frame counting)
- *   onCreateEvent   fn(event) — called on every ROI EXIT
- *   preprocessCache React ref (Map<frameN, {landmarks,handedness}|null>)
- *                   — when provided, landmark detection reads from cache
- *                     instead of running the neural network in real-time.
- *                     Falls back to live detection if the frame is not cached.
+ * ALINHAMENTO CACHE ↔ PLAYBACK
+ * ─────────────────────────────
+ * O useVideoPreprocess gravou o frame N usando timestamp = N/fps segundos
+ * (seek exato). Durante a reprodução, o rVFC entrega metadata.mediaTime,
+ * que é o tempo real do vídeo. Para mapear para o índice do cache usamos:
  *
- * Imperative handle (ref forwarded from App via forwardRef):
- *   { landmarkerRef }  — gives the parent access to the loaded HandLandmarker
- *                        instance so useVideoPreprocess can reuse it.
+ *   frameIndex = Math.round(mediaTime * fps)
+ *
+ * Isso é exatamente o que o legado Python faz:
+ *   current_frame_num = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
+ *   cache.get_detection(current_frame_num)
+ *
+ * IMPORTANTE: DrawingUtils é instanciado UMA vez (ref), não por frame.
  */
 import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react'
-import { Loader, Activity, Play, Pencil, Trash2, Zap, Radio, AlertTriangle } from 'lucide-react'
-import { HandLandmarker, FilesetResolver, DrawingUtils } from '@mediapipe/tasks-vision'
+import { Pencil, Trash2 } from 'lucide-react'
+import { DrawingUtils, HandLandmarker } from '@mediapipe/tasks-vision'
 import RoiOverlay from './RoiOverlay'
 import { RoiTracker, detectRoi } from '../lib/roiTracker'
 
 const ROI_COLORS = ['#00ff00', '#ff00ff', '#00ffff', '#ffff00', '#ff4444', '#ff8800', '#016d1cff', '#4631ffff', '#ff4bc3ff']
 
-// ── Geometric filter (same as CameraView) ───────────────────────────────────
+// INDEX_FINGER_TIP = landmark 8, igual ao legado Python
+function getProbe(landmarks) {
+  const tip = landmarks[8]
+  return { x: tip.x, y: tip.y }
+}
+
 function isValidHand(landmarks) {
   if (!landmarks || landmarks.length < 21) return false
   const xs = landmarks.map((l) => l.x)
@@ -39,48 +42,32 @@ function isValidHand(landmarks) {
   return Math.sqrt(w * w + h * h) >= 0.04
 }
 
-// Probe: centroid of index finger chain (5=MCP, 6=PIP, 7=DIP, 8=tip)
-function getProbe(landmarks) {
-  const chain = [landmarks[5], landmarks[6], landmarks[7], landmarks[8]]
-  return {
-    x: chain.reduce((s, l) => s + l.x, 0) / chain.length,
-    y: chain.reduce((s, l) => s + l.y, 0) / chain.length,
-  }
-}
-
 export default forwardRef(function VideoAnalyzer(
-  { videoRef, src, fps = 30, onCreateEvent, preprocessCache, initialRois, onRoisChange },
+  { videoRef, src, fps = 30, onCreateEvent, preprocessCache, preprocessStatus, initialRois, onRoisChange },
   ref,
 ) {
-  const canvasRef = useRef(null)
-  const landmarkerRef = useRef(null)
-  const rafRef = useRef(null)
-  const trackerRef = useRef(new RoiTracker())
-  const loadingRef = useRef(false)
-  // Highest end_frame already emitted per hand — prevents duplicate events
-  // when the user seeks backward and reprocesses an already-seen range.
-  const maxEndFrameRef = useRef({ Left: -1, Right: -1 })
+  const canvasRef       = useRef(null)
+  const drawUtilsRef    = useRef(null)   // DrawingUtils — instanciado uma vez
+  const trackerRef      = useRef(new RoiTracker())
+  const rvfcHandleRef   = useRef(null)
+  const lastFrameRef    = useRef(-1)     // último frameIndex processado (evita duplicatas)
+  const maxEndFrameRef  = useRef({ Left: -1, Right: -1 })
 
-  const [modelReady, setModelReady] = useState(false)
-  const [modelError, setModelError] = useState(null)
-  const [active, setActive] = useState(false)
-  const [rois, setRois] = useState(() => initialRois ?? [])
+  const [rois, setRois]               = useState(() => initialRois ?? [])
   const [drawingMode, setDrawingMode] = useState(false)
-  const [activeRois, setActiveRois] = useState({ Left: null, Right: null })
-  // Derived from videoRef directly — no prop needed
-  const [videoReady, setVideoReady] = useState(false)
-  // 'cache' | 'live' | null — source of the last landmark detection
-  const [detectionSource, setDetectionSource] = useState(null)
-  // Accumulated hit counters (updated via ref to avoid per-frame re-renders;
-  // flushed to state every ~30 frames so the badge stays current).
-  const detectStatsRef = useRef({ cache: 0, live: 0, flushAt: 30 })
-  const [detectStats, setDetectStats] = useState({ cache: 0, live: 0 })
+  const [activeRois, setActiveRois]   = useState({ Left: null, Right: null })
 
-  const roisRef = useRef(rois)
-  useEffect(() => { roisRef.current = rois }, [rois])
+  const roisRef          = useRef(rois)
+  const fpsRef           = useRef(fps)
+  const onCreateEventRef = useRef(onCreateEvent)
+  const onRoisChangeRef  = useRef(onRoisChange)
 
-  // When the parent passes a new initialRois array (e.g. after JSON import),
-  // seed the internal state. Using a stable JSON key avoids infinite loops.
+  useEffect(() => { roisRef.current         = rois },          [rois])
+  useEffect(() => { fpsRef.current          = fps },           [fps])
+  useEffect(() => { onCreateEventRef.current = onCreateEvent }, [onCreateEvent])
+  useEffect(() => { onRoisChangeRef.current  = onRoisChange },  [onRoisChange])
+
+  // Quando o pai injeta ROIs novas (abrir projeto JSON)
   const initialRoisKey = JSON.stringify(initialRois)
   useEffect(() => {
     if (initialRois && initialRois.length > 0) {
@@ -90,327 +77,184 @@ export default forwardRef(function VideoAnalyzer(
     }
   }, [initialRoisKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const fpsRef = useRef(fps)
-  useEffect(() => { fpsRef.current = fps }, [fps])
+  useImperativeHandle(ref, () => ({ getRois: () => roisRef.current }), [])
 
-  const onCreateEventRef = useRef(onCreateEvent)
-  useEffect(() => { onCreateEventRef.current = onCreateEvent }, [onCreateEvent])
-
-  const activeRef = useRef(active)
-  useEffect(() => { activeRef.current = active }, [active])
-
-  // Keep a stable ref to the cache prop so the tick loop always reads the
-  // latest Map without triggering re-renders or stale closures.
-  // Because preprocessCache is already a ref (stable object), we just point
-  // our own ref at its .current on every render.
-  const preprocessCachePropRef = useRef(null)
-  preprocessCachePropRef.current = preprocessCache ?? null
-
-  // Expose landmarkerRef + getRois so App can read ROIs for export
-  useImperativeHandle(ref, () => ({ landmarkerRef, getRois: () => roisRef.current }), [])
-
-  // ── Track video readiness directly from the element ──────────────────────
+  // ── Inicializar DrawingUtils quando o canvas estiver pronto ──────────────
   useEffect(() => {
-    const video = videoRef?.current
-    if (!video) return
-    const onReady = () => setVideoReady(video.readyState >= 2 && isFinite(video.duration))
-    const onEmpty = () => setVideoReady(false)
-    video.addEventListener('canplay', onReady)
-    video.addEventListener('loadeddata', onReady)
-    video.addEventListener('emptied', onEmpty)
-    // Check immediately in case video is already loaded
-    onReady()
-    return () => {
-      video.removeEventListener('canplay', onReady)
-      video.removeEventListener('loadeddata', onReady)
-      video.removeEventListener('emptied', onEmpty)
-    }
-  }, [videoRef, src])
-
-  // ── Load model once ──────────────────────────────────────────────────────
-  useEffect(() => {
-    if (loadingRef.current || landmarkerRef.current) return
-    loadingRef.current = true
-
-    ;(async () => {
-      try {
-        const vision = await FilesetResolver.forVisionTasks('/mediapipe-wasm')
-        landmarkerRef.current = await HandLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath:
-              'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task',
-            delegate: 'GPU',
-          },
-          runningMode: 'VIDEO',
-          numHands: 2,
-          minHandDetectionConfidence: 0.6,
-          minHandPresenceConfidence: 0.5,
-          minTrackingConfidence: 0.4,
-        })
-        setModelReady(true)
-      } catch (e) {
-        setModelError(`Erro ao carregar modelo: ${e.message ?? e}`)
-      } finally {
-        loadingRef.current = false
-      }
-    })()
-
-    return () => {
-      stopLoop()
-      landmarkerRef.current?.close?.()
-      landmarkerRef.current = null
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // ── Detection loop ───────────────────────────────────────────────────────
-  // Strategy:
-  //   • Use requestVideoFrameCallback (rVFC) when available — fires ONCE per
-  //     decoded video frame, giving us the exact presentedFrames count and the
-  //     frame's mediaTime.  Zero skip-frames, zero double-processing.
-  //   • Fall back to requestAnimationFrame on browsers without rVFC (Safari <17).
-  //   • A secondary RAF loop runs only for the paused-grace-tick case.
-  function startLoop() {
-    const video = videoRef?.current
     const canvas = canvasRef.current
-    if (!video || !canvas || !landmarkerRef.current) return
-
+    if (!canvas) return
     const ctx = canvas.getContext('2d')
-    const drawingUtils = new DrawingUtils(ctx)
+    drawUtilsRef.current = new DrawingUtils(ctx)
+  }, []) // uma única vez
 
-    // Shared state between rVFC and the fallback RAF path
-    let lastVideoTime = -1
-    let lastPresentedFrames = -1   // rVFC only — detect duplicate callbacks
-    let lastWallMs = performance.now()
+  // ── Loop principal — requestVideoFrameCallback ────────────────────────────
+  //
+  // Estratégia:
+  //   1. rVFC é chamado imediatamente ANTES de o frame ser composto na tela,
+  //      então metadata.mediaTime é o tempo EXATO do frame que vai aparecer.
+  //   2. Calculamos frameIndex = round(mediaTime * fps) — mesmo que o legado.
+  //   3. Lemos cache.get(frameIndex) — O(1), zero overhead.
+  //   4. Desenhamos landmarks e passamos pro RoiTracker.
+  //   5. Re-registramos rVFC no FIM do tick para o PRÓXIMO frame.
+  //
+  useEffect(() => {
+    const video = videoRef?.current
+    if (!video || preprocessStatus !== 'done') return
 
-    // ── Paused-grace RAF (always running, lightweight) ────────────────────
-    // Keeps the tracker clock ticking when the video is paused so the grace
-    // period can expire even if no new frames are delivered.
-    function pausedGraceTick() {
-      rafRef.pausedRaf = requestAnimationFrame(pausedGraceTick)
-      if (!activeRef.current) return
-      const video2 = videoRef?.current
-      if (!video2 || video2.readyState < 2) return
-      if (!video2.paused && !video2.ended) return   // only act when paused
+    let stopped = false
 
-      const nowWall = performance.now()
-      const elapsed = nowWall - lastWallMs
-      if (elapsed < 80) return         // throttle to ~12 Hz
-
-      const videoTimeMs = video2.currentTime * 1000
-      const currentRois = roisRef.current
-      // Advance tracker clock by wall-clock delta so grace timer can expire
-      const timeForTracker = videoTimeMs + elapsed
-      lastWallMs = nowWall
-      const newEvents = trackerRef.current.processFrame({}, currentRois, timeForTracker, null)
-      emitEvents(newEvents, currentRois, Math.round(video2.currentTime * fpsRef.current))
+    // Garantir que canvas e DrawingUtils estão prontos
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!drawUtilsRef.current) {
+      drawUtilsRef.current = new DrawingUtils(ctx)
     }
 
-    // ── Core detect — called once per video frame ─────────────────────────
-    function runDetect(videoTime, nowWall, presentedFrames) {
-      if (!activeRef.current) return
-      if (video.readyState < 2) return
+    function tick(_now, metadata) {
+      if (stopped) return
 
-      const vw = video.videoWidth || 640
-      const vh = video.videoHeight || 480
-      if (canvas.width !== vw || canvas.height !== vh) {
-        canvas.width = vw
-        canvas.height = vh
-      }
+      // mediaTime é o tempo do frame que ESTÁ sendo apresentado agora
+      const mediaTime  = metadata?.mediaTime ?? video.currentTime
+      // Usar o fps real gravado pelo preprocess — mesmo divisor usado ao gravar
+      const cache      = preprocessCache?.current ?? null
+      const realFps    = (cache && cache._realFps) ? cache._realFps : fpsRef.current
+      const frameIndex = Math.round(mediaTime * realFps)
 
-      // Detect seek/loop (time jumped backward) → reset tracker
-      if (videoTime < lastVideoTime - 0.05) {
-        trackerRef.current.reset()
-        setActiveRois({ Left: null, Right: null })
-        lastVideoTime = videoTime
-        lastWallMs = nowWall
+      // Evitar reprocessar o mesmo frame (rVFC pode disparar duplicatas em pausa)
+      if (frameIndex === lastFrameRef.current) {
+        rvfcHandleRef.current = video.requestVideoFrameCallback(tick)
         return
       }
+      lastFrameRef.current = frameIndex
 
-      // Skip duplicate rVFC callbacks (same presentedFrames count)
-      if (presentedFrames !== null && presentedFrames === lastPresentedFrames) return
-      if (presentedFrames !== null) lastPresentedFrames = presentedFrames
-
-      lastVideoTime = videoTime
-      lastWallMs = nowWall
-
-      const videoTimeMs = videoTime * 1000
-      const currentFrame = Math.round(videoTime * fpsRef.current)
-
-      // ── Cache-first detection ─────────────────────────────────────────
-      const cache = preprocessCachePropRef.current?.current ?? null
-      let results
-      let fromCache = false
-
-      if (cache && cache.has(currentFrame)) {
-        const cached = cache.get(currentFrame)
-        results = cached ?? { landmarks: [], handedness: [] }
-        fromCache = true
-      } else {
-        // Live detection — pass performance.now() as strictly-increasing ts
-        results = landmarkerRef.current.detectForVideo(video, performance.now())
+      // ── Redimensionar canvas se necessário ──────────────────────────────
+      const vw = video.videoWidth  || 640
+      const vh = video.videoHeight || 480
+      if (canvas.width !== vw || canvas.height !== vh) {
+        canvas.width  = vw
+        canvas.height = vh
+        // DrawingUtils precisa ser recriado após resize do canvas
+        drawUtilsRef.current = new DrawingUtils(ctx)
       }
+      ctx.clearRect(0, 0, vw, vh)
 
-      // Throttled stats flush
-      const stats = detectStatsRef.current
-      if (fromCache) { stats.cache++ } else { stats.live++ }
-      stats.flushAt--
-      if (stats.flushAt <= 0) {
-        setDetectionSource(fromCache ? 'cache' : 'live')
-        setDetectStats({ cache: stats.cache, live: stats.live })
-        stats.flushAt = 30
-      }
+      // ── Ler do cache — O(1), sem MediaPipe em tempo real ────────────────
+      const cached = cache ? (cache.get(frameIndex) ?? null) : null
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
-
-      const validLandmarks = (results.landmarks ?? []).filter(isValidHand)
-      const validHandedness = (results.handedness ?? []).filter(
-        (_, i) => isValidHand(results.landmarks?.[i])
-      )
-
-      for (const landmarks of validLandmarks) {
-        drawingUtils.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS, {
-          color: '#00FF00', lineWidth: 2,
-        })
-        drawingUtils.drawLandmarks(landmarks, { color: '#FF0000', lineWidth: 1, radius: 4 })
-      }
-
+      // ── Desenhar landmarks ───────────────────────────────────────────────
       const handsDetected = {}
-      const currentRois = roisRef.current
+      if (cached && cached.landmarks && cached.handedness) {
+        const du = drawUtilsRef.current
+        for (let i = 0; i < cached.landmarks.length; i++) {
+          const lm = cached.landmarks[i]
+          if (!isValidHand(lm)) continue
 
-      for (let i = 0; i < validLandmarks.length; i++) {
-        const rawLabel = validHandedness[i]?.[0]?.categoryName ?? 'Left'
-        const probe = getProbe(validLandmarks[i])
-        const roiIdx = detectRoi(probe.x, probe.y, currentRois)
-        handsDetected[rawLabel] = roiIdx
+          // Legado: 'Left' MediaPipe = mão direita real (câmera espelhada)
+          const rawLabel  = cached.handedness[i]?.[0]?.categoryName ?? 'Left'
+          const realLabel = rawLabel === 'Left' ? 'Right' : 'Left'
+          const probe     = getProbe(lm)
+          const roiIdx    = detectRoi(probe.x, probe.y, roisRef.current)
+          handsDetected[realLabel] = roiIdx ?? null
 
-        ctx.beginPath()
-        ctx.arc(probe.x * canvas.width, probe.y * canvas.height, 8, 0, Math.PI * 2)
-        ctx.fillStyle = '#00ffff'
-        ctx.fill()
-        ctx.strokeStyle = '#000'
-        ctx.lineWidth = 2
-        ctx.stroke()
+          try {
+            du.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 2 })
+            du.drawLandmarks(lm,  { color: '#FF0000', lineWidth: 1, radius: 4 })
+          } catch (_) { /* ignora erros de desenho em frames corrompidos */ }
+        }
       }
 
       setActiveRois({ Left: handsDetected.Left ?? null, Right: handsDetected.Right ?? null })
 
-      const newEvents = trackerRef.current.processFrame(handsDetected, currentRois, videoTimeMs, currentFrame)
-      emitEvents(newEvents, currentRois, currentFrame)
-    }
+      // ── RoiTracker — mesmo algoritmo de confirmação do legado ────────────
+      const videoTimeMs  = mediaTime * 1000
+      const currentRois  = roisRef.current
+      const newEvents    = trackerRef.current.processFrame(handsDetected, currentRois, videoTimeMs, frameIndex)
 
-    // ── Emit helper (shared by both rVFC and fallback paths) ──────────────
-    function emitEvents(newEvents, currentRois, currentFrame) {
-      const currentFps = fpsRef.current
       for (const ev of newEvents) {
         if (ev.type !== 'EXIT') continue
         const roi = currentRois[ev.roiIndex]
         if (!roi) continue
 
-        const startFrame = ev.entryFrame != null
-          ? ev.entryFrame
-          : Math.max(0, currentFrame - Math.round(ev.duration * currentFps))
-
-        const endFrame = ev.lostFrame != null
-          ? ev.lostFrame
-          : currentFrame
+        const startFrame = ev.entryFrame ?? Math.max(0, frameIndex - Math.round(ev.duration * fpsRef.current))
+        const endFrame   = ev.lostFrame  ?? frameIndex
 
         if (startFrame <= maxEndFrameRef.current[ev.hand]) continue
-
-        const category = ev.hand === 'Left'
-          ? (roi.leftCategory ?? '')
-          : (roi.rightCategory ?? '')
-
         maxEndFrameRef.current[ev.hand] = endFrame
 
-        const actualDuration = currentFps > 0 ? (endFrame - startFrame) / currentFps : ev.duration
+        const dur      = fpsRef.current > 0 ? (endFrame - startFrame) / fpsRef.current : ev.duration
+        const category = ev.hand === 'Left' ? (roi.leftCategory ?? '') : (roi.rightCategory ?? '')
 
         onCreateEventRef.current?.({
-          operation: roi.name,
+          operation:   roi.name,
           start_frame: startFrame,
-          end_frame: Math.max(startFrame + 1, endFrame),
-          duration: Number(actualDuration.toFixed(6)),
+          end_frame:   Math.max(startFrame + 1, endFrame),
+          duration:    Number(dur.toFixed(6)),
           category,
-          object: ev.hand === 'Left' ? 'Mão Esquerda' : 'Mão Direita',
-          resource: roi.name,
+          object:      ev.hand === 'Left' ? 'Mão Esquerda' : 'Mão Direita',
+          resource:    roi.name,
         })
       }
+
+      // Registrar próximo frame
+      rvfcHandleRef.current = video.requestVideoFrameCallback(tick)
     }
 
-    // ── Choose rVFC or RAF ────────────────────────────────────────────────
-    const useRvfc = typeof video.requestVideoFrameCallback === 'function'
+    // ── Detectar seek: resetar tracker quando o tempo pula ──────────────────
+    let lastSeekTime = -1
+    function onSeeked() {
+      trackerRef.current.reset()
+      maxEndFrameRef.current = { Left: -1, Right: -1 }
+      lastFrameRef.current   = -1
+      setActiveRois({ Left: null, Right: null })
+      lastSeekTime = video.currentTime
+    }
+    video.addEventListener('seeked', onSeeked)
 
-    if (useRvfc) {
-      // requestVideoFrameCallback fires exactly once per decoded frame,
-      // aligned with the browser's compositor — no extra skip/duplicate logic needed.
-      function rvfcTick(now, metadata) {
-        if (!activeRef.current) return   // loop stopped
-        runDetect(metadata.mediaTime, now, metadata.presentedFrames)
-        rafRef.current = video.requestVideoFrameCallback(rvfcTick)
-      }
-      rafRef.current = video.requestVideoFrameCallback(rvfcTick)
+    // Iniciar loop
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      rvfcHandleRef.current = video.requestVideoFrameCallback(tick)
     } else {
-      // Fallback: standard RAF — we guard against same-frame re-processing
-      // with the lastVideoTime check inside runDetect.
-      function rafTick() {
-        rafRef.current = requestAnimationFrame(rafTick)
-        if (!activeRef.current) return
-        if (video.readyState < 2) return
-        runDetect(video.currentTime, performance.now(), null)
+      // Fallback RAF para Safari
+      let rafId
+      let lastRafTime = -1
+      const rafTick = () => {
+        if (stopped) return
+        rafId = requestAnimationFrame(rafTick)
+        const t = video.currentTime
+        if (t === lastRafTime || video.readyState < 2) return
+        lastRafTime = t
+        tick(performance.now(), { mediaTime: t })
       }
-      rafRef.current = requestAnimationFrame(rafTick)
+      rafId = requestAnimationFrame(rafTick)
+      rvfcHandleRef.current = { _isRaf: true, _rafId: rafId }
     }
 
-    // Start the lightweight paused-grace ticker
-    rafRef.pausedRaf = requestAnimationFrame(pausedGraceTick)
-  }
-
-  function stopLoop() {
-    const video = videoRef?.current
-    if (rafRef.current) {
-      if (typeof video?.cancelVideoFrameCallback === 'function') {
-        video.cancelVideoFrameCallback(rafRef.current)
-      } else {
-        cancelAnimationFrame(rafRef.current)
+    return () => {
+      stopped = true
+      video.removeEventListener('seeked', onSeeked)
+      const h = rvfcHandleRef.current
+      if (h) {
+        if (h._isRaf) {
+          cancelAnimationFrame(h._rafId)
+        } else if (typeof video.cancelVideoFrameCallback === 'function') {
+          video.cancelVideoFrameCallback(h)
+        }
+        rvfcHandleRef.current = null
       }
-      rafRef.current = null
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      setActiveRois({ Left: null, Right: null })
     }
-    if (rafRef.pausedRaf) {
-      cancelAnimationFrame(rafRef.pausedRaf)
-      rafRef.pausedRaf = null
-    }
-    // Clear canvas
-    const canvas = canvasRef.current
-    if (canvas) {
-      const ctx = canvas.getContext('2d')
-      ctx?.clearRect(0, 0, canvas.width, canvas.height)
-    }
-    setActiveRois({ Left: null, Right: null })
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preprocessStatus, src, videoRef])
 
-  // Start/stop loop when active toggles
+  // Resetar ao trocar de vídeo
   useEffect(() => {
-    if (active && modelReady && videoReady) {
-      startLoop()
-    } else {
-      stopLoop()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, modelReady, videoReady])
-
-  // Stop tracking if video src changes
-  useEffect(() => {
-    setActive(false)
     trackerRef.current.reset()
     maxEndFrameRef.current = { Left: -1, Right: -1 }
-    // Reset detection stats for the new video
-    detectStatsRef.current = { cache: 0, live: 0, flushAt: 30 }
-    setDetectStats({ cache: 0, live: 0 })
-    setDetectionSource(null)
+    lastFrameRef.current   = -1
+    setActiveRois({ Left: null, Right: null })
   }, [src])
-
-  const onRoisChangeRef = useRef(onRoisChange)
-  useEffect(() => { onRoisChangeRef.current = onRoisChange }, [onRoisChange])
 
   const handleRoisChange = useCallback((nextRois) => {
     setRois(nextRois)
@@ -420,37 +264,20 @@ export default forwardRef(function VideoAnalyzer(
     onRoisChangeRef.current?.(nextRois)
   }, [])
 
-  const toggleActive = () => {
-    if (!active) {
-      trackerRef.current.reset()
-    }
-    setActive((v) => !v)
-  }
-
-  // ── Render — pure overlay, zero layout footprint ────────────────────────
-  // The component is wrapped in position:absolute inset:0 by App.jsx.
-  // We fill that container completely and never add block-level height.
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    // Full overlay — passes pointer events through except the toolbar and drawing mode
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
 
-      {/* Landmark canvas.
-          - Internal resolution matches the video's intrinsic size (set in tick()).
-          - CSS object-fit:contain makes the browser scale/letterbox it exactly
-            the same way the <video> element does, so landmarks line up perfectly. */}
       <canvas
         ref={canvasRef}
         style={{
-          position: 'absolute',
-          inset: 0,
-          width: '100%',
-          height: '100%',
+          position: 'absolute', inset: 0,
+          width: '100%', height: '100%',
           objectFit: 'contain',
           pointerEvents: 'none',
         }}
       />
 
-      {/* ROI SVG overlay — pointer events only when drawing */}
       <div style={{ position: 'absolute', inset: 0, pointerEvents: drawingMode ? 'auto' : 'none' }}>
         <RoiOverlay
           rois={rois}
@@ -462,145 +289,60 @@ export default forwardRef(function VideoAnalyzer(
         />
       </div>
 
-      {/* Floating toolbar — top-left corner, always interactive */}
       <div
         style={{
-          position: 'absolute',
-          top: '0.5rem',
-          left: '0.5rem',
-          display: 'flex',
-          gap: '0.4rem',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          pointerEvents: 'auto',
-          zIndex: 10,
+          position: 'absolute', top: '0.5rem', left: '0.5rem',
+          display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap',
+          pointerEvents: 'auto', zIndex: 10,
         }}
       >
-        {/* Model status */}
-        {!modelReady && !modelError && (
-          <span style={{
-            fontSize: '0.72rem', color: '#ccc',
-            background: 'rgba(0,0,0,0.7)', padding: '0.2rem 0.4rem', borderRadius: '0.4rem',
-          }}>
-            <Loader size={12} strokeWidth={2} style={{ animation: 'spin 1s linear infinite' }} /> Carregando modelo…
-          </span>
-        )}
-        {modelError && (
-          <span style={{
-            fontSize: '0.72rem', color: '#ffb4b4',
-            background: 'rgba(0,0,0,0.7)', padding: '0.2rem 0.4rem', borderRadius: '0.4rem',
-          }}>
-            <AlertTriangle size={12} strokeWidth={2} /> {modelError}
-          </span>
-        )}
-
-        {/* Track toggle */}
-        <button
-          onClick={toggleActive}
-          disabled={!modelReady || !videoReady}
-          style={{
-            padding: '0.3rem 0.6rem',
-            borderRadius: '0.4rem',
-            border: active ? '1px solid #1a4a1a' : '1px solid #444',
-            background: active ? 'rgba(13,46,13,0.9)' : 'rgba(0,0,0,0.75)',
-            color: '#fff',
-            cursor: (!modelReady || !videoReady) ? 'not-allowed' : 'pointer',
-            fontSize: '0.75rem',
-            opacity: (!modelReady || !videoReady) ? 0.5 : 1,
-          }}
-        >
-          {active ? <><Activity size={13} strokeWidth={2} /> Rastreando</> : <><Play size={13} strokeWidth={2} /> Rastrear</>}
-        </button>
-
-        {/* Detection source badge — shows whether the current frame came from
-            the pre-processed cache or from live MediaPipe inference */}
-        {active && detectionSource && (() => {
-          const total = detectStats.cache + detectStats.live
-          const cachePct = total > 0 ? Math.round((detectStats.cache / total) * 100) : 0
-          const isFullCache = detectionSource === 'cache'
-          return (
-            <span
-              title={
-                `Cache: ${detectStats.cache} frames\n` +
-                `Ao vivo: ${detectStats.live} frames\n` +
-                `Total processado: ${total}`
-              }
-              style={{
-                padding: '0.2rem 0.5rem',
-                borderRadius: '0.4rem',
-                fontSize: '0.7rem',
-                fontWeight: 600,
-                background: isFullCache ? 'rgba(0,80,20,0.85)' : 'rgba(80,40,0,0.85)',
-                border: `1px solid ${isFullCache ? '#2ca02c' : '#ff7f0e'}`,
-                color: isFullCache ? '#6fcf6f' : '#ffb347',
-                whiteSpace: 'nowrap',
-                cursor: 'default',
-              }}
-            >
-              {isFullCache ? <><Zap size={11} strokeWidth={2} /> Cache</> : <><Radio size={11} strokeWidth={2} /> Ao vivo</>}{' '}
-              <span style={{ opacity: 0.8 }}>{cachePct}%</span>
-            </span>
-          )
-        })()}
-
-        {/* Draw ROI */}
         <button
           onClick={() => setDrawingMode((v) => !v)}
           style={{
-            padding: '0.3rem 0.6rem',
-            borderRadius: '0.4rem',
+            padding: '0.3rem 0.6rem', borderRadius: '0.4rem',
             border: drawingMode ? '1px solid #1a4a1a' : '1px solid #444',
             background: drawingMode ? 'rgba(13,46,13,0.9)' : 'rgba(0,0,0,0.75)',
-            color: '#fff',
-            cursor: 'pointer',
-            fontSize: '0.75rem',
+            color: '#fff', cursor: 'pointer', fontSize: '0.75rem',
+            display: 'flex', alignItems: 'center', gap: '0.3rem',
           }}
         >
-          {drawingMode ? <><Pencil size={13} strokeWidth={2} /> Desenhando…</> : <><Pencil size={13} strokeWidth={2} /> ROI</>}
+          <Pencil size={13} strokeWidth={2} />
+          {drawingMode ? 'Desenhando…' : 'ROI'}
         </button>
 
-        {/* Clear ROIs */}
         {rois.length > 0 && (
           <button
             onClick={() => {
               setRois([])
               trackerRef.current.reset()
               setActiveRois({ Left: null, Right: null })
+              onRoisChangeRef.current?.([])
             }}
             style={{
-              padding: '0.3rem 0.6rem',
-              borderRadius: '0.4rem',
-              border: '1px solid #4b1d1d',
-              background: 'rgba(42,18,18,0.85)',
-              color: '#fff',
-              cursor: 'pointer',
-              fontSize: '0.75rem',
+              padding: '0.3rem 0.6rem', borderRadius: '0.4rem',
+              border: '1px solid #4b1d1d', background: 'rgba(42,18,18,0.85)',
+              color: '#fff', cursor: 'pointer', fontSize: '0.75rem',
+              display: 'flex', alignItems: 'center', gap: '0.3rem',
             }}
           >
             <Trash2 size={13} strokeWidth={2} />
           </button>
         )}
 
-        {/* ROI name badges */}
         {rois.map((roi, i) => (
           <span
             key={i}
             title={`Esq: ${roi.leftCategory || '—'} | Dir: ${roi.rightCategory || '—'}`}
             style={{
-              padding: '0.2rem 0.45rem',
-              borderRadius: '0.35rem',
-              fontSize: '0.7rem',
+              padding: '0.2rem 0.45rem', borderRadius: '0.35rem', fontSize: '0.7rem',
               border: `1px solid ${ROI_COLORS[i % ROI_COLORS.length]}`,
               color: ROI_COLORS[i % ROI_COLORS.length],
-              background: 'rgba(0,0,0,0.75)',
-              cursor: 'default',
-              whiteSpace: 'nowrap',
+              background: 'rgba(0,0,0,0.75)', cursor: 'default', whiteSpace: 'nowrap',
             }}
           >
             {roi.name}
-            <span style={{ opacity: 0.65, marginLeft: '0.25rem' }}>
-              E:{roi.leftCategory || '—'} D:{roi.rightCategory || '—'}
-            </span>
+            {activeRois.Left  === i && ' ✋'}
+            {activeRois.Right === i && ' 🤚'}
           </span>
         ))}
       </div>

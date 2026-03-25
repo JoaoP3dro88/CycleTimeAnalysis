@@ -1,85 +1,407 @@
 {
   "meta": {
-    "video_path": null,
-    "video_filename": null,
-    "fps": 30.0,
-    "total_frames": 0,
+    "video_path": "C:\\Users\\klj1ct\\Desktop\\CycleTimeAnalysis\\data\\videos\\Eletrodo_001.mp4",
+    "video_filename": "Eletrodo_001.mp4",
+    "fps": 31.0,
+    "total_frames": 3904,
     "takt_time": 10.0
   },
   "events": [
     {
-      "operation": "ROI 1",
-      "start_frame": 53197547824,
-      "end_frame": 53197547835,
-      "duration": 0.369,
-      "category": "NNVA",
+      "operation": "ROI 3",
+      "start_frame": 2,
+      "end_frame": 7,
+      "duration": 0.16129,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 2,
+      "end_frame": 111,
+      "duration": 3.516129,
+      "category": "TAV",
       "object": "Mão Esquerda",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 33,
+      "end_frame": 112,
+      "duration": 2.548387,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 136,
+      "end_frame": 142,
+      "duration": 0.193548,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 1",
+      "start_frame": 178,
+      "end_frame": 201,
+      "duration": 0.741935,
+      "category": "TAV",
+      "object": "Mão Direita",
       "resource": "ROI 1"
     },
     {
-      "operation": "ROI 2",
-      "start_frame": 53197548542,
-      "end_frame": 53197548574,
-      "duration": 1.052,
-      "category": "TNAV",
+      "operation": "ROI 3",
+      "start_frame": 150,
+      "end_frame": 804,
+      "duration": 21.096774,
+      "category": "TAV",
       "object": "Mão Esquerda",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 2",
+      "start_frame": 927,
+      "end_frame": 955,
+      "duration": 0.903226,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 2"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 829,
+      "end_frame": 1087,
+      "duration": 8.322581,
+      "category": "TAV",
+      "object": "Mão Esquerda",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 1111,
+      "end_frame": 1118,
+      "duration": 0.225806,
+      "category": "TAV",
+      "object": "Mão Esquerda",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 2",
+      "start_frame": 1118,
+      "end_frame": 1143,
+      "duration": 0.806452,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 2"
+    },
+    {
+      "operation": "ROI 1",
+      "start_frame": 1160,
+      "end_frame": 1169,
+      "duration": 0.290323,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 1"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 1153,
+      "end_frame": 1609,
+      "duration": 14.709677,
+      "category": "TAV",
+      "object": "Mão Esquerda",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 2",
+      "start_frame": 1856,
+      "end_frame": 1887,
+      "duration": 1.0,
+      "category": "TAV",
+      "object": "Mão Direita",
       "resource": "ROI 2"
     },
     {
       "operation": "ROI 2",
-      "start_frame": 53197548641,
-      "end_frame": 53197548672,
-      "duration": 1.024,
-      "category": "TNAV",
-      "object": "Mão Esquerda",
+      "start_frame": 1975,
+      "end_frame": 1982,
+      "duration": 0.225806,
+      "category": "TAV",
+      "object": "Mão Direita",
       "resource": "ROI 2"
     },
     {
+      "operation": "ROI 3",
+      "start_frame": 1616,
+      "end_frame": 2034,
+      "duration": 13.483871,
+      "category": "TAV",
+      "object": "Mão Esquerda",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 1991,
+      "end_frame": 2036,
+      "duration": 1.451613,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 2061,
+      "end_frame": 2070,
+      "duration": 0.290323,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 3"
+    },
+    {
       "operation": "ROI 1",
-      "start_frame": 53197548696,
-      "end_frame": 53197548710,
-      "duration": 0.461,
+      "start_frame": 2081,
+      "end_frame": 2088,
+      "duration": 0.225806,
       "category": "TAV",
       "object": "Mão Direita",
       "resource": "ROI 1"
     },
     {
-      "operation": "ROI 1",
-      "start_frame": 53197548773,
-      "end_frame": 53197548802,
-      "duration": 0.95,
+      "operation": "ROI 3",
+      "start_frame": 2075,
+      "end_frame": 2265,
+      "duration": 6.129032,
+      "category": "TAV",
+      "object": "Mão Esquerda",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 2094,
+      "end_frame": 2374,
+      "duration": 9.032258,
       "category": "TAV",
       "object": "Mão Direita",
-      "resource": "ROI 1"
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 2397,
+      "end_frame": 2704,
+      "duration": 9.903226,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 3"
     },
     {
       "operation": "ROI 2",
-      "start_frame": 53197548849,
-      "end_frame": 53197548887,
-      "duration": 1.252,
-      "category": "TNAV",
-      "object": "Mão Esquerda",
+      "start_frame": 2826,
+      "end_frame": 2850,
+      "duration": 0.774194,
+      "category": "TAV",
+      "object": "Mão Direita",
       "resource": "ROI 2"
     },
     {
+      "operation": "ROI 3",
+      "start_frame": 2276,
+      "end_frame": 2922,
+      "duration": 20.83871,
+      "category": "TAV",
+      "object": "Mão Esquerda",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 2",
+      "start_frame": 2924,
+      "end_frame": 2953,
+      "duration": 0.935484,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 2"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 2968,
+      "end_frame": 2977,
+      "duration": 0.290323,
+      "category": "TAV",
+      "object": "Mão Esquerda",
+      "resource": "ROI 3"
+    },
+    {
       "operation": "ROI 1",
-      "start_frame": 53197548832,
-      "end_frame": 53197548905,
-      "duration": 2.428,
+      "start_frame": 2984,
+      "end_frame": 2991,
+      "duration": 0.225806,
       "category": "TAV",
       "object": "Mão Direita",
       "resource": "ROI 1"
     },
     {
-      "operation": "ROI 1",
-      "start_frame": 53197548945,
-      "end_frame": 53197548962,
-      "duration": 0.572,
+      "operation": "ROI 3",
+      "start_frame": 2993,
+      "end_frame": 3184,
+      "duration": 6.16129,
       "category": "TAV",
       "object": "Mão Direita",
-      "resource": "ROI 1"
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 3186,
+      "end_frame": 3210,
+      "duration": 0.774194,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 3315,
+      "end_frame": 3676,
+      "duration": 11.645161,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 3691,
+      "end_frame": 3696,
+      "duration": 0.16129,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 2,
+      "end_frame": 7,
+      "duration": 0.16129,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 2,
+      "end_frame": 7,
+      "duration": 0.16129,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 2,
+      "end_frame": 7,
+      "duration": 0.16129,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 2",
+      "start_frame": 7,
+      "end_frame": 33,
+      "duration": 0.83871,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 2"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 2,
+      "end_frame": 7,
+      "duration": 0.16129,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 3"
+    },
+    {
+      "operation": "ROI 3",
+      "start_frame": 2,
+      "end_frame": 7,
+      "duration": 0.16129,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "ROI 3"
     }
   ],
-  "rois": [],
-  "timestamp": "2026-03-05T12:25:25.169467"
+  "rois": [
+    {
+      "name": "ROI 1",
+      "points": [
+        {
+          "x": 0.7577168217411747,
+          "y": 0.1690579307895033
+        },
+        {
+          "x": 0.7723097624602141,
+          "y": 0.27942449562832944
+        },
+        {
+          "x": 0.9522890444155092,
+          "y": 0.27311783478039653
+        },
+        {
+          "x": 0.9328317712854456,
+          "y": 0.16590460036553684
+        }
+      ],
+      "leftCategory": "TAV",
+      "rightCategory": "TAV"
+    },
+    {
+      "name": "ROI 2",
+      "points": [
+        {
+          "x": 0.3977582860876013,
+          "y": 0.28888448690022883
+        },
+        {
+          "x": 0.6798879552770544,
+          "y": 0.2857311564762624
+        },
+        {
+          "x": 0.6993451718930845,
+          "y": 0.7082774516056423
+        },
+        {
+          "x": 0.4901800650137442,
+          "y": 0.7240440854076006
+        }
+      ],
+      "leftCategory": "TAV",
+      "rightCategory": "TAV"
+    },
+    {
+      "name": "ROI 3",
+      "points": [
+        {
+          "x": 0.6798879552770544,
+          "y": 0.2857311564762624
+        },
+        {
+          "x": 0.9912034776475694,
+          "y": 0.276271165204363
+        },
+        {
+          "x": 0.9912034776475694,
+          "y": 0.7618841237666942
+        },
+        {
+          "x": 0.6993451718930845,
+          "y": 0.7650374358727866
+        }
+      ],
+      "leftCategory": "TAV",
+      "rightCategory": "TAV"
+    }
+  ],
+  "timestamp": "2026-03-25T19:31:26.447684"
 }

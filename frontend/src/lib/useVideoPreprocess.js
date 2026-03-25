@@ -1,43 +1,30 @@
 /**
  * useVideoPreprocess.js
  *
- * Pre-processes every frame of a video with MediaPipe HandLandmarker and
- * stores the results in a Map so VideoAnalyzer can play them back instantly,
- * without running the neural network in real-time during playback.
+ * Envia o vídeo para o backend Python (POST /api/preprocess) que roda
+ * mp.solutions.hands em todos os frames e devolve o JSON de landmarks.
  *
- * Architecture
- * ────────────
- *  • Creates its OWN HandLandmarker instance (does NOT share with VideoAnalyzer).
- *    This avoids all timestamp-collision and mode-switching problems.
- *  • A hidden <video> is created in memory; we seek frame-by-frame and call
- *    detectForVideo() using a fake strictly-increasing timestamp per frame.
- *  • Results are stored in:
- *      cacheRef.current  →  Map<frameNumber, { landmarks, handedness } | null>
- *    where null means "no hands detected on this frame".
- *  • Progress (0–1) is reported reactively.
- *  • Processing is cancelled automatically when src changes or component unmounts.
+ * O cache resultante tem o mesmo formato esperado pelo VideoAnalyzer:
+ *   Map<frameIndex, { landmarks, handedness } | null>
+ *   cache._realFps  → fps real do vídeo (reportado pelo backend)
+ *
+ * O "src" recebido é uma blob: URL criada pelo App quando o usuário
+ * carrega o vídeo.  Convertemos de volta para Blob via fetch para
+ * poder enviar como multipart ao backend.
  */
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
-
-// Same model URL used by VideoAnalyzer
-const MODEL_URL =
-  'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task'
+import { apiPostFile } from './api'
 
 /**
- * @param {object} opts
- * @param {string}  opts.src            — blob URL of the video to process
- * @param {string}   opts.src         — blob URL of the video to process
- * @param {number}   opts.fps         — frames per second
- * @param {function} [opts.onProgress] — (fraction: 0–1) => void
- * @param {function} [opts.onDone]     — () => void
+ * @param {{ src: string, fps: number }} opts
  * @returns {{ cacheRef, status, progress, cancel }}
+ *   status: 'idle' | 'uploading' | 'processing' | 'done' | 'error' | 'cancelled'
  */
-export function useVideoPreprocess({ src, fps, onProgress, onDone }) {
+export function useVideoPreprocess({ src, fps }) {
   const cacheRef  = useRef(new Map())
   const cancelRef = useRef(false)
 
-  const [status,   setStatus]   = useState('idle')   // idle|processing|done|error|cancelled
+  const [status,   setStatus]   = useState('idle')
   const [progress, setProgress] = useState(0)
 
   const cancel = useCallback(() => { cancelRef.current = true }, [])
@@ -50,38 +37,65 @@ export function useVideoPreprocess({ src, fps, onProgress, onDone }) {
       return
     }
 
-    // Signal any in-flight run to stop
+    // Cancel any in-flight request
     cancelRef.current = true
 
-    // Brief delay so the previous async run can detect the cancellation flag
-    const t = setTimeout(() => {
+    const t = setTimeout(async () => {
       cancelRef.current = false
       cacheRef.current  = new Map()
-      setStatus('processing')
+      setStatus('uploading')
       setProgress(0)
 
-      runPreprocess({
-        src,
-        fps,
-        cacheRef,
-        cancelRef,
-        onProgress: (frac) => {
-          setProgress(frac)
-          onProgress?.(frac)
-        },
-        onDone: () => {
-          setStatus('done')
-          setProgress(1)
-          onDone?.()
-        },
-        onError: (err) => {
-          console.error('[VideoPreprocess] error:', err)
-          setStatus('error')
-        },
-        onCancelled: () => {
-          setStatus('cancelled')
-        },
-      })
+      try {
+        // 1. Converter blob: URL → Blob real
+        const blobResp = await fetch(src)
+        const blob     = await blobResp.blob()
+
+        if (cancelRef.current) { setStatus('cancelled'); return }
+
+        setStatus('processing')
+
+        // 2. Enviar ao backend — resposta pode demorar (vídeo inteiro)
+        //    Enquanto aguarda mostramos uma barra indeterminada (fake loading)
+        const fakeTimer = startFakeProgress(setProgress)
+
+        const data = await apiPostFile('/api/preprocess', blob, 'video.mp4')
+
+        clearInterval(fakeTimer)
+
+        if (cancelRef.current) { setStatus('cancelled'); return }
+
+        // 3. Popular o cache com o resultado
+        //    Backend devolve:  { fps, total_frames, frames: { "0": null|{landmarks,handedness}, ... } }
+        const realFps = data.fps ?? fps
+        const cache   = new Map()
+
+        for (const [key, val] of Object.entries(data.frames ?? {})) {
+          const frameIndex = parseInt(key, 10)
+          if (val === null) {
+            cache.set(frameIndex, null)
+          } else {
+            // Converter arrays [[x,y,z],...] → objetos {x,y,z} que o VideoAnalyzer espera
+            cache.set(frameIndex, {
+              landmarks:  val.landmarks.map(hand =>
+                hand.map(([x, y, z]) => ({ x, y, z }))
+              ),
+              handedness: val.handedness.map(([label, score]) => [{ categoryName: label, score }]),
+            })
+          }
+        }
+
+        cache._realFps = realFps
+        cacheRef.current = cache
+
+        setProgress(1)
+        setStatus('done')
+
+      } catch (err) {
+        if (cancelRef.current) { setStatus('cancelled'); return }
+        console.error('[useVideoPreprocess] erro:', err)
+        setStatus('error')
+      }
     }, 100)
 
     return () => {
@@ -94,114 +108,15 @@ export function useVideoPreprocess({ src, fps, onProgress, onDone }) {
   return { cacheRef, status, progress, cancel }
 }
 
-// ─── Core async processing function ──────────────────────────────────────────
-async function runPreprocess({
-  src, fps, cacheRef, cancelRef,
-  onProgress, onDone, onError, onCancelled,
-}) {
-  let landmarker = null
-
-  try {
-    // ── 1. Load a DEDICATED HandLandmarker instance in VIDEO mode ─────────
-    // We never share this instance with VideoAnalyzer — that avoids all
-    // timestamp-collision problems between the preprocess series and the
-    // live playback series.
-    const vision = await FilesetResolver.forVisionTasks('/mediapipe-wasm')
-    if (cancelRef.current) { onCancelled(); return }
-
-    landmarker = await HandLandmarker.createFromOptions(vision, {
-      baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
-      runningMode: 'VIDEO',
-      numHands: 2,
-      minHandDetectionConfidence: 0.5,
-      minHandPresenceConfidence: 0.5,
-      minTrackingConfidence: 0.4,
-    })
-    if (cancelRef.current) { landmarker.close(); onCancelled(); return }
-
-    // ── 2. Load the video into a detached element ─────────────────────────
-    const video = document.createElement('video')
-    video.src     = src
-    video.muted   = true
-    video.preload = 'auto'
-    // crossOrigin is only needed for http(s) URLs (for canvas taint rules).
-    // Blob URLs are always same-origin and reject the CORS attribute.
-    if (!src.startsWith('blob:')) {
-      video.crossOrigin = 'anonymous'
-    }
-
-    await new Promise((resolve, reject) => {
-      video.onloadedmetadata = resolve
-      video.onerror = () => reject(new Error('Falha ao carregar metadados do vídeo'))
-    })
-    if (cancelRef.current) { landmarker.close(); onCancelled(); return }
-
-    const totalFrames  = Math.ceil(video.duration * fps)
-    const frameIntervalMs = 1000 / fps
-
-    // ── 3. Canvas for frame extraction ────────────────────────────────────
-    const W = video.videoWidth  || 640
-    const H = video.videoHeight || 480
-    const canvas = document.createElement('canvas')
-    canvas.width  = W
-    canvas.height = H
-    const ctx = canvas.getContext('2d')
-
-    // ── 4. Seek-and-detect loop ───────────────────────────────────────────
-    // detectForVideo requires a STRICTLY INCREASING timestamp (ms).
-    // We use frame * frameIntervalMs — each call is one frame apart,
-    // which satisfies MediaPipe's constraint.
-    for (let frame = 0; frame < totalFrames; frame++) {
-      if (cancelRef.current) {
-        landmarker.close()
-        onCancelled()
-        return
-      }
-
-      await seekTo(video, frame / fps)
-      ctx.drawImage(video, 0, 0, W, H)
-
-      let result
-      try {
-        result = landmarker.detectForVideo(canvas, frame * frameIntervalMs)
-      } catch (e) {
-        console.warn(`[VideoPreprocess] frame ${frame} skipped:`, e.message)
-        result = { landmarks: [], handedness: [] }
-      }
-
-      const { landmarks = [], handedness = [] } = result
-      cacheRef.current.set(
-        frame,
-        landmarks.length > 0 ? { landmarks, handedness } : null,
-      )
-
-      // Report progress and yield to the browser every 10 frames
-      if (frame % 10 === 0 || frame === totalFrames - 1) {
-        onProgress((frame + 1) / totalFrames)
-        await yieldToUI()
-      }
-    }
-
-    landmarker.close()
-    onDone()
-
-  } catch (err) {
-    landmarker?.close()
-    onError(err)
-  }
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function seekTo(video, time) {
-  return new Promise((resolve) => {
-    if (Math.abs(video.currentTime - time) < 0.001) { resolve(); return }
-    const done = () => { video.removeEventListener('seeked', done); resolve() }
-    video.addEventListener('seeked', done)
-    video.currentTime = time
-  })
-}
-
-function yieldToUI() {
-  return new Promise((r) => setTimeout(r, 0))
+// ── Fake progress enquanto o backend processa ─────────────────────────────────
+// Sobe de 0 → 0.99 assintoticamente. Nunca chega a 100% — isso só acontece
+// quando o backend responde (setProgress(1) + setStatus('done')).
+function startFakeProgress(setProgress) {
+  let elapsed = 0
+  return setInterval(() => {
+    elapsed += 0.5
+    // Curva assintótica: 1 - e^(-elapsed/60)  →  chega a ~0.63 em 60s, ~0.86 em 120s
+    const frac = Math.min(0.99, 1 - Math.exp(-elapsed / 60))
+    setProgress(frac)
+  }, 500)
 }

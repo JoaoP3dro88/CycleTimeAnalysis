@@ -34,7 +34,7 @@ const hBtn = (active = false, danger = false) => ({
 
 function App() {
   const playerRef    = useRef(null)
-  const videoStateRef = useRef({ videoRef: { current: null }, src: '' })
+  const videoRef     = useRef(null)   // single <video> DOM element shared by all
   const filePickerRef = useRef(null)
   const analyzerRef  = useRef(null)
 
@@ -52,6 +52,7 @@ function App() {
   const [activeTab,  setActiveTab]  = useState('editor') // 'editor' | 'dashboard'
   const [showSettings, setShowSettings] = useState(false)
   const [importedRois, setImportedRois] = useState(null) // ROIs restored from a JSON import
+  const [trackingMode, setTrackingMode] = useState('manual') // 'manual' | 'tracking'
 
   // Editable project meta (FPS + takt time)
   const [metaFps,    setMetaFps]    = useState(30)
@@ -79,7 +80,7 @@ function App() {
     cacheRef: preprocessCacheRef,
     status:   preprocessStatus,
     progress: preprocessProgress,
-  } = useVideoPreprocess({ src: videoSrc, fps })
+  } = useVideoPreprocess({ src: trackingMode === 'tracking' ? videoSrc : '', fps })
 
   // Show a toast when preprocess finishes or fails, then auto-dismiss
   useEffect(() => {
@@ -119,7 +120,6 @@ function App() {
     setProject(null)
     setAnalytics(null)
     setVideoSrc('')
-    videoStateRef.current.src = ''
     setLoopRange({ active: false, startFrame: 0, endFrame: 0 })
     setPendingStartFrame(null)
     setLoopIndex(-1)
@@ -143,7 +143,6 @@ function App() {
       const parsed = JSON.parse(await file.text())
 
       setVideoSrc('')
-      videoStateRef.current.src = ''
       setLoopRange({ active: false, startFrame: 0, endFrame: 0 })
       setPendingStartFrame(null)
       setLoopIndex(-1)
@@ -166,7 +165,6 @@ function App() {
           try {
             const testUrl = `/api/projects/video-by-path?path=${encodeURIComponent(videoPath)}`
             if ((await fetch(testUrl, { method: 'HEAD' })).ok) {
-              videoStateRef.current.src = testUrl
               setVideoSrc(testUrl)
               loaded = true
             }
@@ -176,7 +174,6 @@ function App() {
           try {
             const match = (await apiGet('/api/projects/videos')).find(v => v.name === videoFilename)
             if (match) {
-              videoStateRef.current.src = match.url
               setVideoSrc(match.url)
               loaded = true
             }
@@ -303,6 +300,13 @@ function App() {
           <button style={{ ...hBtn(), display: "flex", alignItems: "center", gap: "0.35rem" }} onClick={onSaveProject} disabled={busy}>
             <Save size={14} strokeWidth={2} /> {unsaved ? 'Salvar *' : 'Salvar'}
           </button>
+          <button
+            style={{ ...hBtn(trackingMode === 'tracking'), display: "flex", alignItems: "center", gap: "0.35rem" }}
+            onClick={() => setTrackingMode(m => m === 'manual' ? 'tracking' : 'manual')}
+            title={trackingMode === 'tracking' ? 'Modo: Rastreamento (clique para manual)' : 'Modo: Manual (clique para rastreamento)'}
+          >
+            {trackingMode === 'tracking' ? '🤖 Rastreamento' : '✏️ Manual'}
+          </button>
           <label style={{ ...hBtn(), display: "flex", alignItems: "center", gap: "0.35rem" }}>
             <FolderOpen size={14} strokeWidth={2} /> Carregar vídeo
             <input
@@ -313,7 +317,6 @@ function App() {
                 const file = e.target.files?.[0]
                 if (!file) return
                 const url = URL.createObjectURL(file)
-                videoStateRef.current.src = url
                 setVideoSrc(url)
                 setLoopRange({ active: false, startFrame: 0, endFrame: 0 })
                 setPendingStartFrame(null)
@@ -411,10 +414,12 @@ function App() {
       )}
 
       {/* ── Pre-process progress (persistent while running) ──────────────── */}
-      {videoSrc && preprocessStatus === 'processing' && (
+      {videoSrc && trackingMode === 'tracking' && (preprocessStatus === 'uploading' || preprocessStatus === 'processing') && (
         <div style={{ margin: '0 0.75rem 0.2rem', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#888' }}>
-            <span style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>⏳ Pré-processando com MediaPipe…</span>
+            <span style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+              {preprocessStatus === 'uploading' ? '📤 Enviando vídeo ao backend…' : '⏳ Processando com MediaPipe (Python)…'}
+            </span>
             <span>{Math.round(preprocessProgress * 100)}%</span>
           </div>
           <div style={{ height: '3px', borderRadius: '2px', background: '#222', overflow: 'hidden' }}>
@@ -579,21 +584,22 @@ function App() {
                   />
                 ) : (
                 <div style={{ position: 'relative', width: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                  {/* Video fills all available space */}
+                  {/* Single <video> element — shared by VideoPlayer controls and VideoAnalyzer */}
                   <VideoCanvas
-                    videoRef={videoStateRef.current.videoRef}
-                    src={videoStateRef.current.src}
+                    videoRef={videoRef}
+                    src={videoSrc}
                     maxHeight={'100%'}
                   />
-                  {/* Analyzer overlays sit on top of the video, absolutely positioned */}
-                  {videoSrc && (
+                  {/* Analyzer overlay sits on top of the video, absolutely positioned */}
+                  {videoSrc && trackingMode === 'tracking' && (
                     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
                       <VideoAnalyzer
                         ref={analyzerRef}
-                        videoRef={videoStateRef.current.videoRef}
+                        videoRef={videoRef}
                         src={videoSrc}
                         fps={fps}
                         preprocessCache={preprocessCacheRef}
+                        preprocessStatus={preprocessStatus}
                         initialRois={importedRois}
                         onRoisChange={(nextRois) => {
                           setProject((prev) => {
@@ -637,32 +643,11 @@ function App() {
                 <VideoPlayer
                   ref={playerRef}
                   fps={fps}
-                  externalSrc={videoStateRef.current.src}
+                  externalSrc={videoSrc}
+                  externalVideoRef={videoRef}
                   loopRange={loopRange}
                   onLoopRangeChange={(lr) => setLoopRange(lr)}
                   layout="controls"
-                  renderVideo={({ videoRef, src, isReady: vReady }) => {
-                    // Critical: keep the VideoPlayer's internal <video> ref pointing to
-                    // the same DOM element used by the canvas. Otherwise isReady never
-                    // becomes true and all controls stay disabled.
-                    videoStateRef.current.videoRef = videoRef
-                    const nextSrc = videoStateRef.current.src || src
-                    videoStateRef.current.src = nextSrc
-                    // Sync ready state for VideoAnalyzer (no-op: VideoAnalyzer self-detects readiness)
-                    if (videoRef?.current && videoRef.current.src !== nextSrc) {
-                      videoRef.current.src = nextSrc
-                      // Critical on some browsers: setting .src directly doesn't always
-                      // trigger a metadata load unless we call load().
-                      try {
-                        videoRef.current.pause?.()
-                        videoRef.current.currentTime = 0
-                        videoRef.current.load?.()
-                      } catch {
-                        // ignore
-                      }
-                    }
-                    return null
-                  }}
                   onMarkStart={(frame) => {
                     setPendingStartFrame(frame)
                   }}

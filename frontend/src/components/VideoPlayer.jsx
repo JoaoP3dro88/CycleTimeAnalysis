@@ -19,9 +19,11 @@ export function VideoCanvas({ videoRef, src, maxHeight = '60vh' }) {
 /**
  * Web video player with start/end marking similar to the legacy PyQt workflow.
  *
- * Notes:
- * - In browser we work in seconds. We map to frames using fps.
- * - We rely on requestVideoFrameCallback when available for smoother frame sampling.
+ * Props:
+ *   externalVideoRef  — if provided, VideoPlayer uses this ref as the <video>
+ *                       element instead of creating its own internal one.
+ *                       This is the primary way to share the DOM element with
+ *                       VideoAnalyzer so rVFC fires on the correct element.
  */
 const VideoPlayer = forwardRef(function VideoPlayer(
   {
@@ -33,11 +35,13 @@ const VideoPlayer = forwardRef(function VideoPlayer(
     layout = 'stacked', // 'stacked' | 'controls' | 'split'
     renderVideo,
     externalSrc,
+    externalVideoRef,   // ← NEW: the App's own videoRef
   },
   ref
 ) {
-  const videoRef = useRef(null)
-  const rVfcId = useRef(null)
+  const internalVideoRef = useRef(null)
+  // Use the external ref when provided; fall back to internal.
+  const videoRef = externalVideoRef ?? internalVideoRef
 
   const [fileUrl, setFileUrl] = useState('')
   const [fileName, setFileName] = useState('')
@@ -90,8 +94,6 @@ const VideoPlayer = forwardRef(function VideoPlayer(
       setUiFrame(Math.round((video.currentTime || 0) * fps))
     }
 
-    // Some browsers/cases (especially when src is set from outside) can fire
-    // loadeddata/canplay more reliably than loadedmetadata.
     function onCanPlayLike() {
       if (!isFinite(video.duration)) return
       setIsReady(true)
@@ -105,30 +107,15 @@ const VideoPlayer = forwardRef(function VideoPlayer(
       setUiFrame(Math.round((video.currentTime || 0) * fps))
     }
 
-    function onPlay() {
-      setIsPlaying(true)
-    }
-
-    function onPause() {
-      setIsPlaying(false)
-    }
+    function onPlay()  { setIsPlaying(true) }
+    function onPause() { setIsPlaying(false) }
 
     video.addEventListener('loadedmetadata', onLoadedMetadata)
-  video.addEventListener('loadeddata', onCanPlayLike)
-  video.addEventListener('canplay', onCanPlayLike)
+    video.addEventListener('loadeddata', onCanPlayLike)
+    video.addEventListener('canplay', onCanPlayLike)
     video.addEventListener('timeupdate', onTimeUpdate)
     video.addEventListener('play', onPlay)
     video.addEventListener('pause', onPause)
-
-    // requestVideoFrameCallback gives us frame-accurate-ish updates.
-    if (typeof video.requestVideoFrameCallback === 'function') {
-      const tick = () => {
-        setCurrentS(video.currentTime || 0)
-        setUiFrame(Math.round((video.currentTime || 0) * fps))
-        rVfcId.current = video.requestVideoFrameCallback(tick)
-      }
-      rVfcId.current = video.requestVideoFrameCallback(tick)
-    }
 
     return () => {
       video.removeEventListener('loadedmetadata', onLoadedMetadata)
@@ -137,11 +124,8 @@ const VideoPlayer = forwardRef(function VideoPlayer(
       video.removeEventListener('timeupdate', onTimeUpdate)
       video.removeEventListener('play', onPlay)
       video.removeEventListener('pause', onPause)
-      if (rVfcId.current && typeof video.cancelVideoFrameCallback === 'function') {
-        video.cancelVideoFrameCallback(rVfcId.current)
-      }
     }
-  }, [effectiveSrc])
+  }, [effectiveSrc, fps])
 
   // If the src changes from the outside, make sure the <video> element is updated.
   useEffect(() => {

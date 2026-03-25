@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from .api.routers import analytics, projects
+from .api.routers import analytics, projects, preprocess
 from .config import settings
 
 
@@ -18,8 +18,9 @@ def create_app() -> FastAPI:
 		allow_headers=["*"]
 	)
 
-	app.include_router(projects.router, prefix=settings.api_prefix)
-	app.include_router(analytics.router, prefix=settings.api_prefix)
+	app.include_router(projects.router,    prefix=settings.api_prefix)
+	app.include_router(analytics.router,   prefix=settings.api_prefix)
+	app.include_router(preprocess.router,  prefix=settings.api_prefix)
 
 	# Static mount for uploaded videos (solution B).
 	# This enables the frontend to reload the same video URL across sessions.
