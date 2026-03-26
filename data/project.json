@@ -1,407 +1,319 @@
 {
   "meta": {
-    "video_path": "C:\\Users\\klj1ct\\Desktop\\CycleTimeAnalysis\\data\\videos\\Eletrodo_001.mp4",
-    "video_filename": "Eletrodo_001.mp4",
+    "video_path": "C:\\Users\\klj1ct\\Desktop\\CycleTimeAnalysis\\data\\videos\\Eletrodo_001_copia.mp4",
+    "video_filename": "Eletrodo_001_copia.mp4",
     "fps": 31.0,
     "total_frames": 3904,
     "takt_time": 10.0
   },
   "events": [
     {
-      "operation": "ROI 3",
+      "operation": "Medicao Manual",
       "start_frame": 2,
-      "end_frame": 7,
-      "duration": 0.16129,
-      "category": "TAV",
+      "end_frame": 9,
+      "duration": 0.225806,
+      "category": "TNAV",
       "object": "Mão Direita",
-      "resource": "ROI 3"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 3",
-      "start_frame": 2,
-      "end_frame": 111,
-      "duration": 3.516129,
+      "operation": "Alimentacao Maq",
+      "start_frame": 9,
+      "end_frame": 29,
+      "duration": 0.645161,
       "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "Alimentacao Maq"
+    },
+    {
+      "operation": "Medicao Manual",
+      "start_frame": 2,
+      "end_frame": 114,
+      "duration": 3.612903,
+      "category": "TNAV",
       "object": "Mão Esquerda",
-      "resource": "ROI 3"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 3",
-      "start_frame": 33,
-      "end_frame": 112,
-      "duration": 2.548387,
+      "operation": "Medicao Manual",
+      "start_frame": 30,
+      "end_frame": 115,
+      "duration": 2.741935,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medicao Manual"
+    },
+    {
+      "operation": "Alimentacao Maq",
+      "start_frame": 115,
+      "end_frame": 134,
+      "duration": 0.612903,
       "category": "TAV",
       "object": "Mão Direita",
-      "resource": "ROI 3"
+      "resource": "Alimentacao Maq"
     },
     {
-      "operation": "ROI 3",
-      "start_frame": 136,
+      "operation": "Medicao Manual",
+      "start_frame": 134,
       "end_frame": 142,
-      "duration": 0.193548,
-      "category": "TAV",
+      "duration": 0.258065,
+      "category": "TNAV",
       "object": "Mão Direita",
-      "resource": "ROI 3"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 1",
+      "operation": "Botao",
       "start_frame": 178,
       "end_frame": 201,
       "duration": 0.741935,
       "category": "TAV",
       "object": "Mão Direita",
-      "resource": "ROI 1"
+      "resource": "Botao"
     },
     {
-      "operation": "ROI 3",
-      "start_frame": 150,
+      "operation": "Medicao Manual",
+      "start_frame": 144,
       "end_frame": 804,
-      "duration": 21.096774,
-      "category": "TAV",
+      "duration": 21.290323,
+      "category": "TNAV",
       "object": "Mão Esquerda",
-      "resource": "ROI 3"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 2",
-      "start_frame": 927,
-      "end_frame": 955,
-      "duration": 0.903226,
+      "operation": "Medicao Manual",
+      "start_frame": 201,
+      "end_frame": 930,
+      "duration": 23.516129,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medicao Manual"
+    },
+    {
+      "operation": "Alimentacao Maq",
+      "start_frame": 930,
+      "end_frame": 950,
+      "duration": 0.645161,
       "category": "TAV",
       "object": "Mão Direita",
-      "resource": "ROI 2"
+      "resource": "Alimentacao Maq"
     },
     {
-      "operation": "ROI 3",
+      "operation": "Medicao Manual",
       "start_frame": 829,
       "end_frame": 1087,
       "duration": 8.322581,
-      "category": "TAV",
+      "category": "TNAV",
       "object": "Mão Esquerda",
-      "resource": "ROI 3"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 3",
+      "operation": "Medicao Manual",
       "start_frame": 1111,
-      "end_frame": 1118,
-      "duration": 0.225806,
-      "category": "TAV",
+      "end_frame": 1124,
+      "duration": 0.419355,
+      "category": "TNAV",
       "object": "Mão Esquerda",
-      "resource": "ROI 3"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 2",
-      "start_frame": 1118,
-      "end_frame": 1143,
-      "duration": 0.806452,
+      "operation": "Alimentacao Maq",
+      "start_frame": 1122,
+      "end_frame": 1141,
+      "duration": 0.612903,
       "category": "TAV",
       "object": "Mão Direita",
-      "resource": "ROI 2"
+      "resource": "Alimentacao Maq"
     },
     {
-      "operation": "ROI 1",
-      "start_frame": 1160,
-      "end_frame": 1169,
-      "duration": 0.290323,
+      "operation": "Medicao Manual",
+      "start_frame": 1141,
+      "end_frame": 1147,
+      "duration": 0.193548,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medicao Manual"
+    },
+    {
+      "operation": "Botao",
+      "start_frame": 1162,
+      "end_frame": 1168,
+      "duration": 0.193548,
       "category": "TAV",
       "object": "Mão Direita",
-      "resource": "ROI 1"
+      "resource": "Botao"
     },
     {
-      "operation": "ROI 3",
-      "start_frame": 1153,
+      "operation": "Medicao Manual",
+      "start_frame": 1152,
       "end_frame": 1609,
-      "duration": 14.709677,
-      "category": "TAV",
+      "duration": 14.741935,
+      "category": "TNAV",
       "object": "Mão Esquerda",
-      "resource": "ROI 3"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 2",
-      "start_frame": 1856,
-      "end_frame": 1887,
-      "duration": 1.0,
+      "operation": "Medicao Manual",
+      "start_frame": 1168,
+      "end_frame": 1859,
+      "duration": 22.290323,
+      "category": "TNAV",
+      "object": "Mão Direita",
+      "resource": "Medicao Manual"
+    },
+    {
+      "operation": "Alimentacao Maq",
+      "start_frame": 1859,
+      "end_frame": 1883,
+      "duration": 0.774194,
       "category": "TAV",
       "object": "Mão Direita",
-      "resource": "ROI 2"
+      "resource": "Alimentacao Maq"
     },
     {
-      "operation": "ROI 2",
-      "start_frame": 1975,
-      "end_frame": 1982,
-      "duration": 0.225806,
-      "category": "TAV",
-      "object": "Mão Direita",
-      "resource": "ROI 2"
-    },
-    {
-      "operation": "ROI 3",
-      "start_frame": 1616,
-      "end_frame": 2034,
-      "duration": 13.483871,
-      "category": "TAV",
+      "operation": "Medicao Manual",
+      "start_frame": 1617,
+      "end_frame": 2041,
+      "duration": 13.677419,
+      "category": "TNAV",
       "object": "Mão Esquerda",
-      "resource": "ROI 3"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 3",
-      "start_frame": 1991,
-      "end_frame": 2036,
-      "duration": 1.451613,
+      "operation": "Alimentacao Maq",
+      "start_frame": 2041,
+      "end_frame": 2058,
+      "duration": 0.548387,
       "category": "TAV",
       "object": "Mão Direita",
-      "resource": "ROI 3"
+      "resource": "Alimentacao Maq"
     },
     {
-      "operation": "ROI 3",
-      "start_frame": 2061,
+      "operation": "Medicao Manual",
+      "start_frame": 2058,
       "end_frame": 2070,
-      "duration": 0.290323,
-      "category": "TAV",
+      "duration": 0.387097,
+      "category": "TNAV",
       "object": "Mão Direita",
-      "resource": "ROI 3"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 1",
-      "start_frame": 2081,
+      "operation": "Botao",
+      "start_frame": 2082,
       "end_frame": 2088,
-      "duration": 0.225806,
+      "duration": 0.193548,
       "category": "TAV",
       "object": "Mão Direita",
-      "resource": "ROI 1"
+      "resource": "Botao"
     },
     {
-      "operation": "ROI 3",
-      "start_frame": 2075,
+      "operation": "Medicao Manual",
+      "start_frame": 2071,
       "end_frame": 2265,
-      "duration": 6.129032,
-      "category": "TAV",
+      "duration": 6.258065,
+      "category": "TNAV",
       "object": "Mão Esquerda",
-      "resource": "ROI 3"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 3",
-      "start_frame": 2094,
+      "operation": "Medicao Manual",
+      "start_frame": 2088,
       "end_frame": 2374,
-      "duration": 9.032258,
-      "category": "TAV",
+      "duration": 9.225806,
+      "category": "TNAV",
       "object": "Mão Direita",
-      "resource": "ROI 3"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 3",
+      "operation": "Medicao Manual",
       "start_frame": 2397,
       "end_frame": 2704,
       "duration": 9.903226,
-      "category": "TAV",
+      "category": "TNAV",
       "object": "Mão Direita",
-      "resource": "ROI 3"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 2",
-      "start_frame": 2826,
-      "end_frame": 2850,
-      "duration": 0.774194,
+      "operation": "Alimentacao Maq",
+      "start_frame": 2828,
+      "end_frame": 2847,
+      "duration": 0.612903,
       "category": "TAV",
       "object": "Mão Direita",
-      "resource": "ROI 2"
+      "resource": "Alimentacao Maq"
     },
     {
-      "operation": "ROI 3",
+      "operation": "Medicao Manual",
       "start_frame": 2276,
-      "end_frame": 2922,
-      "duration": 20.83871,
+      "end_frame": 2931,
+      "duration": 21.129032,
+      "category": "TNAV",
+      "object": "Mão Esquerda",
+      "resource": "Medicao Manual"
+    },
+    {
+      "operation": "Alimentacao Maq",
+      "start_frame": 2928,
+      "end_frame": 2949,
+      "duration": 0.677419,
+      "category": "TAV",
+      "object": "Mão Direita",
+      "resource": "Alimentacao Maq"
+    },
+    {
+      "operation": "Alimentacao Maq",
+      "start_frame": 2931,
+      "end_frame": 2962,
+      "duration": 1.0,
       "category": "TAV",
       "object": "Mão Esquerda",
-      "resource": "ROI 3"
+      "resource": "Alimentacao Maq"
     },
     {
-      "operation": "ROI 2",
-      "start_frame": 2924,
-      "end_frame": 2953,
-      "duration": 0.935484,
-      "category": "TAV",
+      "operation": "Medicao Manual",
+      "start_frame": 2949,
+      "end_frame": 2962,
+      "duration": 0.419355,
+      "category": "TNAV",
       "object": "Mão Direita",
-      "resource": "ROI 2"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 3",
-      "start_frame": 2968,
-      "end_frame": 2977,
-      "duration": 0.290323,
-      "category": "TAV",
-      "object": "Mão Esquerda",
-      "resource": "ROI 3"
-    },
-    {
-      "operation": "ROI 1",
-      "start_frame": 2984,
-      "end_frame": 2991,
-      "duration": 0.225806,
-      "category": "TAV",
-      "object": "Mão Direita",
-      "resource": "ROI 1"
-    },
-    {
-      "operation": "ROI 3",
-      "start_frame": 2993,
-      "end_frame": 3184,
-      "duration": 6.16129,
-      "category": "TAV",
-      "object": "Mão Direita",
-      "resource": "ROI 3"
-    },
-    {
-      "operation": "ROI 3",
-      "start_frame": 3186,
+      "operation": "Medicao Manual",
+      "start_frame": 2990,
       "end_frame": 3210,
-      "duration": 0.774194,
-      "category": "TAV",
+      "duration": 7.096774,
+      "category": "TNAV",
       "object": "Mão Direita",
-      "resource": "ROI 3"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 3",
+      "operation": "Medicao Manual",
       "start_frame": 3315,
       "end_frame": 3676,
       "duration": 11.645161,
-      "category": "TAV",
+      "category": "TNAV",
       "object": "Mão Direita",
-      "resource": "ROI 3"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 3",
+      "operation": "Medicao Manual",
       "start_frame": 3691,
-      "end_frame": 3696,
-      "duration": 0.16129,
-      "category": "TAV",
+      "end_frame": 3698,
+      "duration": 0.225806,
+      "category": "TNAV",
       "object": "Mão Direita",
-      "resource": "ROI 3"
+      "resource": "Medicao Manual"
     },
     {
-      "operation": "ROI 3",
-      "start_frame": 2,
-      "end_frame": 7,
-      "duration": 0.16129,
+      "operation": "Alimentacao Maq",
+      "start_frame": 3698,
+      "end_frame": 3719,
+      "duration": 0.677419,
       "category": "TAV",
       "object": "Mão Direita",
-      "resource": "ROI 3"
-    },
-    {
-      "operation": "ROI 3",
-      "start_frame": 2,
-      "end_frame": 7,
-      "duration": 0.16129,
-      "category": "TAV",
-      "object": "Mão Direita",
-      "resource": "ROI 3"
-    },
-    {
-      "operation": "ROI 3",
-      "start_frame": 2,
-      "end_frame": 7,
-      "duration": 0.16129,
-      "category": "TAV",
-      "object": "Mão Direita",
-      "resource": "ROI 3"
-    },
-    {
-      "operation": "ROI 2",
-      "start_frame": 7,
-      "end_frame": 33,
-      "duration": 0.83871,
-      "category": "TAV",
-      "object": "Mão Direita",
-      "resource": "ROI 2"
-    },
-    {
-      "operation": "ROI 3",
-      "start_frame": 2,
-      "end_frame": 7,
-      "duration": 0.16129,
-      "category": "TAV",
-      "object": "Mão Direita",
-      "resource": "ROI 3"
-    },
-    {
-      "operation": "ROI 3",
-      "start_frame": 2,
-      "end_frame": 7,
-      "duration": 0.16129,
-      "category": "TAV",
-      "object": "Mão Direita",
-      "resource": "ROI 3"
+      "resource": "Alimentacao Maq"
     }
   ],
-  "rois": [
-    {
-      "name": "ROI 1",
-      "points": [
-        {
-          "x": 0.7577168217411747,
-          "y": 0.1690579307895033
-        },
-        {
-          "x": 0.7723097624602141,
-          "y": 0.27942449562832944
-        },
-        {
-          "x": 0.9522890444155092,
-          "y": 0.27311783478039653
-        },
-        {
-          "x": 0.9328317712854456,
-          "y": 0.16590460036553684
-        }
-      ],
-      "leftCategory": "TAV",
-      "rightCategory": "TAV"
-    },
-    {
-      "name": "ROI 2",
-      "points": [
-        {
-          "x": 0.3977582860876013,
-          "y": 0.28888448690022883
-        },
-        {
-          "x": 0.6798879552770544,
-          "y": 0.2857311564762624
-        },
-        {
-          "x": 0.6993451718930845,
-          "y": 0.7082774516056423
-        },
-        {
-          "x": 0.4901800650137442,
-          "y": 0.7240440854076006
-        }
-      ],
-      "leftCategory": "TAV",
-      "rightCategory": "TAV"
-    },
-    {
-      "name": "ROI 3",
-      "points": [
-        {
-          "x": 0.6798879552770544,
-          "y": 0.2857311564762624
-        },
-        {
-          "x": 0.9912034776475694,
-          "y": 0.276271165204363
-        },
-        {
-          "x": 0.9912034776475694,
-          "y": 0.7618841237666942
-        },
-        {
-          "x": 0.6993451718930845,
-          "y": 0.7650374358727866
-        }
-      ],
-      "leftCategory": "TAV",
-      "rightCategory": "TAV"
-    }
-  ],
-  "timestamp": "2026-03-25T19:31:26.447684"
+  "rois": [],
+  "timestamp": "2026-03-26T12:07:19.889900"
 }

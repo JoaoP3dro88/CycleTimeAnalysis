@@ -43,7 +43,7 @@ function isValidHand(landmarks) {
 }
 
 export default forwardRef(function VideoAnalyzer(
-  { videoRef, src, fps = 30, onCreateEvent, preprocessCache, preprocessStatus, initialRois, onRoisChange },
+  { videoRef, src, fps = 30, onCreateEvent, preprocessCache, preprocessStatus, initialRois, onRoisChange, loopRange, events = [] },
   ref,
 ) {
   const canvasRef       = useRef(null)
@@ -52,6 +52,7 @@ export default forwardRef(function VideoAnalyzer(
   const rvfcHandleRef   = useRef(null)
   const lastFrameRef    = useRef(-1)     // último frameIndex processado (evita duplicatas)
   const maxEndFrameRef  = useRef({ Left: -1, Right: -1 })
+  const processedFramesRef = useRef({})
 
   const [rois, setRois]               = useState(() => initialRois ?? [])
   const [drawingMode, setDrawingMode] = useState(false)
@@ -179,8 +180,23 @@ export default forwardRef(function VideoAnalyzer(
         const startFrame = ev.entryFrame ?? Math.max(0, frameIndex - Math.round(ev.duration * fpsRef.current))
         const endFrame   = ev.lostFrame  ?? frameIndex
 
-        if (startFrame <= maxEndFrameRef.current[ev.hand]) continue
-        maxEndFrameRef.current[ev.hand] = endFrame
+        // Nova checagem: não criar evento se já existe evento sobreposto para mesma mão/ROI
+        // Checagem robusta: não criar evento se TODO o intervalo já está coberto
+        const handLabel = ev.hand === 'Left' ? 'Mão Esquerda' : 'Mão Direita'
+        const key = handLabel + '|' + roi.name
+        if (!processedFramesRef.current[key]) processedFramesRef.current[key] = new Set()
+        let alreadyProcessed = true
+        for (let f = startFrame; f < endFrame; ++f) {
+          if (!processedFramesRef.current[key].has(f)) {
+            alreadyProcessed = false
+            break
+          }
+        }
+        if (alreadyProcessed) continue
+        // Marca todos os frames do novo evento como processados
+        for (let f = startFrame; f < endFrame; ++f) {
+          processedFramesRef.current[key].add(f)
+        }
 
         const dur      = fpsRef.current > 0 ? (endFrame - startFrame) / fpsRef.current : ev.duration
         const category = ev.hand === 'Left' ? (roi.leftCategory ?? '') : (roi.rightCategory ?? '')
@@ -191,12 +207,18 @@ export default forwardRef(function VideoAnalyzer(
           end_frame:   Math.max(startFrame + 1, endFrame),
           duration:    Number(dur.toFixed(6)),
           category,
-          object:      ev.hand === 'Left' ? 'Mão Esquerda' : 'Mão Direita',
+          object:      handLabel,
           resource:    roi.name,
         })
       }
 
       // Registrar próximo frame
+      // Bloquear criação de eventos automáticos se loopRange?.active
+      if (loopRange?.active) {
+        rvfcHandleRef.current = video.requestVideoFrameCallback(tick)
+        return
+      }
+
       rvfcHandleRef.current = video.requestVideoFrameCallback(tick)
     }
 

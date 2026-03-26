@@ -281,7 +281,7 @@ function App() {
         {/* Left: brand + status */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
           <h1 style={{ margin: 0, fontSize: '1.05rem', lineHeight: 1.2, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <Timer size={16} strokeWidth={2} /> Cycle Time Analysis
+            <Timer size={16} strokeWidth={2} />Bosch Cycle Time Analysis
           </h1>
           {busy && <span style={{ fontSize: '0.72rem', color: '#666' }}>Processando…</span>}
           {!busy && unsaved && <span style={{ fontSize: '0.72rem', color: '#c8a02a' }}>● Não salvo</span>}
@@ -619,6 +619,8 @@ function App() {
                           }
                           updateProject(nextProject)
                         }}
+                        loopRange={loopRange}
+                        events={project?.events ?? []}
                       />
                     </div>
                   )}
