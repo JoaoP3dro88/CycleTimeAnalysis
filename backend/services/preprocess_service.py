@@ -6,10 +6,6 @@ preprocess_service.py
 Runs MediaPipe mp.solutions.hands on every frame of a video file and
 returns the results as a plain dict that can be JSON-serialised directly.
 
-Because the FastAPI venv has mediapipe 0.10.33 (no mp.solutions), we
-delegate the actual processing to the system Python (Python 3.12 global)
-which has mediapipe 0.10.21 with mp.solutions.hands available.
-
 Result format:
   {
     "fps": 30.0,
@@ -26,39 +22,87 @@ Result format:
 """
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-# Python global com mediapipe 0.10.21 (mp.solutions.hands disponível)
-_GLOBAL_PYTHON = r"C:\Users\klj1ct\AppData\Local\Programs\Python\Python312\python.exe"
+# Flag: True quando rodando dentro de um bundle PyInstaller
+_IS_FROZEN = getattr(sys, "frozen", False)
 
-# Script auxiliar que faz o processamento real (chamado como subprocess)
-_WORKER_SCRIPT = str(Path(__file__).parent / "_preprocess_worker.py")
+# Caminho do site-packages do venv — onde mediapipe/cv2 estão instalados
+# Funciona tanto em dev quanto no exe (embutido em _internal/venv_site_packages/)
+_VENV_SITE: str | None = None
+if _IS_FROZEN:
+    _internal = Path(getattr(sys, "_MEIPASS", ""))
+    _candidate = _internal / "venv_site_packages"
+    if _candidate.exists():
+        _VENV_SITE = str(_candidate)
+
+
+def _get_python_and_worker() -> tuple[str, str]:
+    """
+    Retorna (caminho_python, caminho_worker_script).
+
+    Frozen: lê o pyvenv.cfg embutido para descobrir o Python base do sistema
+            e passa o venv_site_packages via PYTHONPATH no preprocess_video().
+    Dev:    usa sys.executable (já tem mediapipe via venv).
+    """
+    if _IS_FROZEN:
+        _internal = Path(getattr(sys, "_MEIPASS", ""))
+        # Lê o python.exe base do pyvenv.cfg embutido
+        cfg = _internal / "pyvenv.cfg"
+        python_exe = None
+        if cfg.exists():
+            for line in cfg.read_text(encoding="utf-8").splitlines():
+                if line.startswith("executable"):
+                    python_exe = line.split("=", 1)[1].strip()
+                    break
+        # Fallback: usa python do PATH
+        if not python_exe or not Path(python_exe).exists():
+            import shutil
+            python_exe = shutil.which("python") or shutil.which("python3") or "python"
+        worker_script = _internal / "worker" / "_preprocess_worker.py"
+        return str(python_exe), str(worker_script)
+    else:
+        return sys.executable, str(Path(__file__).parent / "_preprocess_worker.py")
 
 
 def preprocess_video(video_path: str) -> dict:
     """
-    Chama o worker Python externo e devolve o resultado como dict.
-    Raises RuntimeError em caso de falha.
+    Processa o vídeo com MediaPipe e devolve o resultado como dict.
+    Sempre usa subprocess:
+    - Frozen: usa o python.exe do venv embutido em _internal/venv_python/
+              com PYTHONPATH apontando para o site-packages do venv embutido
+    - Dev: usa sys.executable diretamente
     """
-    # Usar arquivo temporário para o resultado (evita limite de buffer do pipe)
+    python_exe, worker_script = _get_python_and_worker()
+
+    env = None
+    if _IS_FROZEN:
+        _internal = Path(getattr(sys, "_MEIPASS", ""))
+        venv_site = _internal / "venv_site_packages"
+        if venv_site.exists():
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(venv_site)
+            # Limpar VIRTUAL_ENV para evitar conflitos
+            env.pop("VIRTUAL_ENV", None)
+
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         tmp_path = tmp.name
 
     try:
         result = subprocess.run(
-            [_GLOBAL_PYTHON, _WORKER_SCRIPT, video_path, tmp_path],
+            [python_exe, worker_script, video_path, tmp_path],
             capture_output=True,
             text=True,
             encoding="utf-8",
+            env=env,
         )
-
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or "Falha no pré-processamento")
 
-        # Ler resultado do arquivo temporário
         tmp_file = Path(tmp_path)
         if not tmp_file.exists() or tmp_file.stat().st_size == 0:
             raise RuntimeError("Worker não gerou arquivo de resultado")
@@ -67,5 +111,4 @@ def preprocess_video(video_path: str) -> dict:
             return json.load(f)
 
     finally:
-        # Limpar arquivo temporário
         Path(tmp_path).unlink(missing_ok=True)

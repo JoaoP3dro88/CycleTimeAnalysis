@@ -2,32 +2,31 @@
 """
 _preprocess_worker.py
 
-Chamado pelo preprocess_service.py como subprocess usando o Python global
-(que tem mediapipe 0.10.21 com mp.solutions.hands).
+Pode ser usado de duas formas:
+  1. Como subprocess (modo dev): python _preprocess_worker.py video.mp4 out.json
+  2. Como módulo importado (modo frozen/PyInstaller): run_worker(video_path, out_path)
 
-Recebe o caminho do vídeo como argv[1] e imprime o resultado JSON no stdout.
+Nota: no modo frozen, o runtime hook pyi_hooks/rthook_mediapipe.py já adiciona
+os diretórios de DLL ao search path antes de qualquer import acontecer.
 """
 import sys
 import json
-import cv2
-import mediapipe as mp
 
-def main():
-    if len(sys.argv) < 2:
-        print(json.dumps({"error": "Caminho do video nao informado"}))
-        sys.exit(1)
 
-    video_path = sys.argv[1]
-    mp_hands   = mp.solutions.hands
+def run_worker(video_path: str, out_path: str) -> None:
+    """Processa o vídeo e grava o resultado em out_path (JSON)."""
+    import cv2
+    import mediapipe as mp
+
+    mp_hands = mp.solutions.hands
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(json.dumps({"error": f"Nao foi possivel abrir: {video_path}"}))
-        sys.exit(1)
+        raise RuntimeError(f"Nao foi possivel abrir: {video_path}")
 
-    fps          = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    frames       = {}
-    frame_index  = 0
+    fps         = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    frames      = {}
+    frame_index = 0
 
     with mp_hands.Hands(
         static_image_mode        = False,
@@ -70,17 +69,21 @@ def main():
         "frames":       frames,
     }
 
-    # Gravar em arquivo temporário (evita o limite de buffer do pipe no subprocess)
-    # O caminho do arquivo de saída é passado como argv[2]
-    out_path = sys.argv[2] if len(sys.argv) > 2 else None
-    if out_path:
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(output, f, separators=(',', ':'))
-        # Confirmar sucesso no stdout (pequeno, sem risco de buffer overflow)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(output, f, separators=(',', ':'))
+
+
+def main():
+    if len(sys.argv) < 3:
+        print(json.dumps({"error": "Uso: worker.py <video> <out.json>"}))
+        sys.exit(1)
+    try:
+        run_worker(sys.argv[1], sys.argv[2])
         print("OK")
-    else:
-        # Fallback: imprimir no stdout (só funciona para vídeos pequenos)
-        print(json.dumps(output, separators=(',', ':')))
+    except Exception as e:
+        print(json.dumps({"error": str(e)}))
+        sys.exit(1)
+
 
 if __name__ == '__main__':
     main()

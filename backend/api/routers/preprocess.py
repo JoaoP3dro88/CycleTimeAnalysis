@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import traceback
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -29,8 +30,10 @@ async def preprocess(file: UploadFile = File(...)) -> JSONResponse:
 
     try:
         result = preprocess_video(tmp_path)
-    except RuntimeError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        # Retorna o traceback completo no detail para facilitar debug
+        tb = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}\n\n{tb}")
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 

@@ -38,6 +38,19 @@ function App() {
   const filePickerRef = useRef(null)
   const analyzerRef  = useRef(null)
 
+  // ── Heartbeat: mantém o servidor vivo e encerra ao fechar ─────────────────
+  useEffect(() => {
+    const ping = () => fetch('/api/heartbeat', { method: 'POST' }).catch(() => {})
+    ping()
+    const interval = setInterval(ping, 5000)
+    const onUnload = () => navigator.sendBeacon('/api/shutdown')
+    window.addEventListener('beforeunload', onUnload)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('beforeunload', onUnload)
+    }
+  }, [])
+
   const [project,    setProject]    = useState(null)
   const [analytics,  setAnalytics]  = useState(null)
   const [error,      setError]      = useState('')
@@ -281,7 +294,7 @@ function App() {
         {/* Left: brand + status */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
           <h1 style={{ margin: 0, fontSize: '1.05rem', lineHeight: 1.2, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <Timer size={16} strokeWidth={2} />Bosch Cycle Time Analysis
+            <Timer size={16} strokeWidth={2} />Cycle Time Analysis
           </h1>
           {busy && <span style={{ fontSize: '0.72rem', color: '#666' }}>Processando…</span>}
           {!busy && unsaved && <span style={{ fontSize: '0.72rem', color: '#c8a02a' }}>● Não salvo</span>}
@@ -344,7 +357,9 @@ function App() {
                       if (elapsed < sampleDuration && meta.mediaTime < duration - 0.1) {
                         probeVideo.requestVideoFrameCallback(tick)
                       } else {
-                        const detectedFps = elapsed > 0 ? Math.round(frameCount / elapsed) : metaFps
+                        // Manter precisão total — não arredondar para inteiro.
+                        // Math.round(29.97) = 30 causaria erro acumulado nos timestamps.
+                        const detectedFps = elapsed > 0 ? frameCount / elapsed : metaFps
                         const safeDetectedFps = detectedFps >= 1 && detectedFps <= 240 ? detectedFps : metaFps
                         const totalFrames = Math.round(duration * safeDetectedFps)
                         setMetaFps(safeDetectedFps)
