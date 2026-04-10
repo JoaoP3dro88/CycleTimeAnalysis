@@ -1,85 +1,12 @@
 {
   "meta": {
-    "video_path": null,
-    "video_filename": null,
-    "fps": 30.0,
-    "total_frames": 0,
+    "video_path": "C:\\Users\\klj1ct\\Desktop\\CycleTimeAnalysis\\data\\videos\\VID_20260408_102502_0_COMPRESSED.mp4",
+    "video_filename": "VID_20260408_102502_0_COMPRESSED.mp4",
+    "fps": 25.109138594075326,
+    "total_frames": 5145,
     "takt_time": 10.0
   },
-  "events": [
-    {
-      "operation": "ROI 1",
-      "start_frame": 53197547824,
-      "end_frame": 53197547835,
-      "duration": 0.369,
-      "category": "NNVA",
-      "object": "Mão Esquerda",
-      "resource": "ROI 1"
-    },
-    {
-      "operation": "ROI 2",
-      "start_frame": 53197548542,
-      "end_frame": 53197548574,
-      "duration": 1.052,
-      "category": "TNAV",
-      "object": "Mão Esquerda",
-      "resource": "ROI 2"
-    },
-    {
-      "operation": "ROI 2",
-      "start_frame": 53197548641,
-      "end_frame": 53197548672,
-      "duration": 1.024,
-      "category": "TNAV",
-      "object": "Mão Esquerda",
-      "resource": "ROI 2"
-    },
-    {
-      "operation": "ROI 1",
-      "start_frame": 53197548696,
-      "end_frame": 53197548710,
-      "duration": 0.461,
-      "category": "TAV",
-      "object": "Mão Direita",
-      "resource": "ROI 1"
-    },
-    {
-      "operation": "ROI 1",
-      "start_frame": 53197548773,
-      "end_frame": 53197548802,
-      "duration": 0.95,
-      "category": "TAV",
-      "object": "Mão Direita",
-      "resource": "ROI 1"
-    },
-    {
-      "operation": "ROI 2",
-      "start_frame": 53197548849,
-      "end_frame": 53197548887,
-      "duration": 1.252,
-      "category": "TNAV",
-      "object": "Mão Esquerda",
-      "resource": "ROI 2"
-    },
-    {
-      "operation": "ROI 1",
-      "start_frame": 53197548832,
-      "end_frame": 53197548905,
-      "duration": 2.428,
-      "category": "TAV",
-      "object": "Mão Direita",
-      "resource": "ROI 1"
-    },
-    {
-      "operation": "ROI 1",
-      "start_frame": 53197548945,
-      "end_frame": 53197548962,
-      "duration": 0.572,
-      "category": "TAV",
-      "object": "Mão Direita",
-      "resource": "ROI 1"
-    }
-  ],
+  "events": [],
   "rois": [],
-  "timestamp": "2026-03-05T12:25:25.169467"
+  "timestamp": "2026-04-10T16:21:45.765626"
 }

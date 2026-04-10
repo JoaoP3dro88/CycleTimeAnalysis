@@ -1,17 +1,22 @@
-"""Dev entrypoint to run the API from inside the `backend/` folder.
+"""Entry-point para rodar a aplicação (dev e produção/PyInstaller).
 
-Why this exists:
-- On Windows, running `python -m uvicorn backend.main:app --reload` while your CWD
-  is `backend/` can fail because the reload subprocess doesn't have the project
-  root on `sys.path`, so `import backend` breaks.
-
-This script forces the project root onto `sys.path` and then starts uvicorn.
+Uso:
+    python -m backend.run          # desenvolvimento
+    CycleTimeAnalysis.exe          # bundle PyInstaller
 """
 
 from __future__ import annotations
 
+import os
 import sys
+import threading
+import time
+import webbrowser
 from pathlib import Path
+
+_PORT = 8000
+_HOST = "127.0.0.1"
+_LOCK_FILE = Path(os.environ.get("TEMP", os.environ.get("TMP", "."))) / "CycleTimeAnalysis.lock"
 
 
 def _ensure_project_root_on_syspath() -> None:
@@ -21,18 +26,51 @@ def _ensure_project_root_on_syspath() -> None:
 		sys.path.insert(0, root_str)
 
 
+def _already_running() -> bool:
+	"""Retorna True se outro processo já está escutando na porta."""
+	import socket
+	with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+		s.settimeout(0.5)
+		return s.connect_ex((_HOST, _PORT)) == 0
+
+
+def _open_browser():
+	time.sleep(1.5)
+	webbrowser.open(f"http://{_HOST}:{_PORT}")
+
+
 def main() -> None:
 	_ensure_project_root_on_syspath()
 
+	is_frozen = getattr(sys, "frozen", False)
+
+	# ── Single-instance: se já está rodando, só abre o browser ──────────────
+	if _already_running():
+		webbrowser.open(f"http://{_HOST}:{_PORT}")
+		sys.exit(0)
+
 	import uvicorn
+
+	# Quando empacotado sem console, sys.stdout/stderr são None.
+	if is_frozen:
+		devnull = open(os.devnull, 'w')
+		if sys.stdout is None:
+			sys.stdout = devnull
+		if sys.stderr is None:
+			sys.stderr = devnull
+
+	# Abre o browser em background após o servidor iniciar
+	threading.Thread(target=_open_browser, daemon=True).start()
 
 	uvicorn.run(
 		"backend.main:app",
-		host="127.0.0.1",
-		port=8000,
-		reload=True,
+		host=_HOST,
+		port=_PORT,
+		reload=not is_frozen,
+		log_config=None if is_frozen else uvicorn.config.LOGGING_CONFIG,
 	)
 
 
 if __name__ == "__main__":
 	main()
+

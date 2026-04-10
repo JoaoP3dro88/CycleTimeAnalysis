@@ -33,6 +33,11 @@ function mediapipeWasmPlugin() {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), mediapipeWasmPlugin()],
+  build: {
+    // Build vai para backend/frontend_dist — servido pelo FastAPI em produção
+    outDir: '../backend/frontend_dist',
+    emptyOutDir: true,
+  },
   server: {
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',

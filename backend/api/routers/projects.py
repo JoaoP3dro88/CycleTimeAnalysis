@@ -92,6 +92,11 @@ def get_video_by_path(path: str = Query(..., description="Absolute path to the v
     return FileResponse(str(p), media_type=media_type)
 
 
+@router.head("/video-by-path")
+def head_video_by_path(path: str = Query(..., description="Absolute path to the video file")) -> FileResponse:
+    return get_video_by_path(path)
+
+
 @router.post("/videos/upload")
 async def upload_video(file: UploadFile = File(...)) -> dict[str, str]:
     if not file.filename:
