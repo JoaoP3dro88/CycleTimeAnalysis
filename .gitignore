@@ -1,8 +1,48 @@
 # =====================
 # Python
 # =====================
-__pycache__/
-*.py[cod]
+__# =====================
+# YOLO tooling (gerado localmente, não versionar)
+# =====================
+tools/frames/
+tools/frames_annotated/
+tools/frames_task_1/
+tools/frames_task_2/
+tools/results/
+tools/dataset_pose*/
+tools/model/
+*.tar.gz
+runs/
+# data/
+
+# =====================
+# PyInstaller build (gerado localmente)
+# =====================
+dist/
+build/
+*.spec.bak
+*.pkg
+*.exe
+*.pkg
+
+# =====================
+# Frontend build (gerado pelo vite)
+# =====================
+frontend/dist/
+backend/frontend_dist/
+
+# =====================
+# Arquivos temporários do worker
+# =====================
+*.tmp
+*.temp
+
+# =====================
+# Debug / testes locais
+# =====================
+debug.log
+*.log
+/data/project.json.py[cod]
 *$py.class
 *.so
 *.egg
