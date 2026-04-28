@@ -106,9 +106,8 @@ export default function CameraView({ fps = 30, onCreateEvent }) {
         const vision = await FilesetResolver.forVisionTasks('/mediapipe-wasm')
         const landmarker = await HandLandmarker.createFromOptions(vision, {
           baseOptions: {
-            // full model — more robust to occlusion (e.g. hand holding objects)
-            modelAssetPath:
-              'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task',
+            // modelo local — sem dependência de internet
+            modelAssetPath: '/mediapipe-wasm/hand_landmarker.task',
             delegate: 'GPU',
           },
           runningMode: 'VIDEO',
@@ -338,6 +337,7 @@ export default function CameraView({ fps = 30, onCreateEvent }) {
               fontSize: '0.9rem',
               padding: '1rem',
               textAlign: 'center',
+              whiteSpace: 'pre-line',
             }}
           >
             {error ?? status}

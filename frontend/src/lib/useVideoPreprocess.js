@@ -48,8 +48,10 @@ export function useVideoPreprocess({ src, fps }) {
 
       try {
         // 1. Converter blob: URL → Blob real
+        console.log('[preprocess] 1/4 — convertendo blob URL para Blob...')
         const blobResp = await fetch(src)
         const blob     = await blobResp.blob()
+        console.log(`[preprocess] 1/4 — Blob pronto: ${(blob.size / 1024 / 1024).toFixed(1)} MB`)
 
         if (cancelRef.current) { setStatus('cancelled'); return }
 
@@ -57,17 +59,23 @@ export function useVideoPreprocess({ src, fps }) {
 
         // 2. Enviar ao backend — resposta pode demorar (vídeo inteiro)
         //    Enquanto aguarda mostramos uma barra indeterminada (fake loading)
+        console.log('[preprocess] 2/4 — enviando vídeo ao backend (POST /api/preprocess)...')
         const fakeTimer = startFakeProgress(setProgress)
 
+        const t0   = performance.now()
         const data = await apiPostFile('/api/preprocess', blob, 'video.mp4')
+        const secs = ((performance.now() - t0) / 1000).toFixed(1)
 
         clearInterval(fakeTimer)
+        console.log(`[preprocess] 2/4 — resposta recebida em ${secs}s`)
 
         if (cancelRef.current) { setStatus('cancelled'); return }
 
         // 3. Popular o cache com o resultado
         //    Backend devolve:  { fps, total_frames, frames: { "0": null|{landmarks,handedness}, ... } }
-        const realFps = data.fps ?? fps
+        const realFps    = data.fps ?? fps
+        const totalFrames = data.total_frames ?? 0
+        console.log(`[preprocess] 3/4 — processando ${totalFrames} frames a ${realFps} fps...`)
         const cache   = new Map()
 
         for (const [key, val] of Object.entries(data.frames ?? {})) {
@@ -88,12 +96,18 @@ export function useVideoPreprocess({ src, fps }) {
         cache._realFps = realFps
         cacheRef.current = cache
 
+        const framesWithHands = [...cache.values()].filter(v => v !== null).length
+        console.log(`[preprocess] 4/4 — cache pronto: ${cache.size} frames, ${framesWithHands} com mãos detectadas`)
+
         setProgress(1)
         setStatus('done')
 
       } catch (err) {
         if (cancelRef.current) { setStatus('cancelled'); return }
-        console.error('[useVideoPreprocess] erro:', err)
+        console.error('[preprocess] ERRO:', err)
+        // Extrair a mensagem de detalhe do backend se disponível
+        const detail = err.message ?? String(err)
+        console.error('[preprocess] Detalhe completo:', detail)
         setStatus('error')
       }
     }, 100)

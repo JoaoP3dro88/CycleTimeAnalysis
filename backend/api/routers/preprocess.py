@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import traceback
 from pathlib import Path
@@ -17,6 +18,10 @@ async def preprocess(file: UploadFile = File(...)) -> JSONResponse:
     """
     Recebe um vídeo, processa todos os frames com MediaPipe (mp.solutions.hands)
     e devolve o JSON com os landmarks indexados por número de frame.
+
+    Roda em thread separada (asyncio.to_thread) para não bloquear o event loop
+    do uvicorn durante o processamento — permite que heartbeat e outras
+    requisições continuem sendo atendidas enquanto o vídeo é processado.
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="Arquivo sem nome")
@@ -29,9 +34,10 @@ async def preprocess(file: UploadFile = File(...)) -> JSONResponse:
         tmp_path = tmp.name
 
     try:
-        result = preprocess_video(tmp_path)
+        # asyncio.to_thread → roda o subprocess em thread separada,
+        # liberando o event loop para responder heartbeat durante o processamento
+        result = await asyncio.to_thread(preprocess_video, tmp_path)
     except Exception as e:
-        # Retorna o traceback completo no detail para facilitar debug
         tb = traceback.format_exc()
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}\n\n{tb}")
     finally:

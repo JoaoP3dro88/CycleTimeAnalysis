@@ -1,12 +1,12 @@
 {
   "meta": {
-    "video_path": "C:\\Users\\klj1ct\\Desktop\\CycleTimeAnalysis\\data\\videos\\VID_20260408_102502_0_COMPRESSED.mp4",
-    "video_filename": "VID_20260408_102502_0_COMPRESSED.mp4",
-    "fps": 25.109138594075326,
-    "total_frames": 5145,
+    "video_path": "C:\\Users\\klj1ct\\Desktop\\CycleTimeAnalysis\\data\\videos\\Eletrodo_001.mp4",
+    "video_filename": "Eletrodo_001.mp4",
+    "fps": 30.5,
+    "total_frames": 3841,
     "takt_time": 10.0
   },
   "events": [],
   "rois": [],
-  "timestamp": "2026-04-10T16:21:45.765626"
+  "timestamp": "2026-04-27T19:36:10.861105"
 }
