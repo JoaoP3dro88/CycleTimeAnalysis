@@ -52,6 +52,9 @@ build/
 .eggs/
 *.pyo
 *.pyd
+Análise Processo Turquia/
+CycleTimeAnalysis_beta/
+*.zip
 
 # Virtual environments
 .venv/
@@ -59,6 +62,7 @@ venv/
 env/
 ENV/
 .env
+backend/venv_teste_luva/
 
 # =====================
 # Node / Frontend
@@ -67,6 +71,7 @@ node_modules/
 dist/
 .cache/
 *.local
+
 
 # =====================
 # IDEs e Editores
@@ -113,3 +118,4 @@ tools/model/
 *.tar.gz
 runs/
 # data/
+

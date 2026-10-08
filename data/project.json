@@ -1,12 +1,12 @@
 {
   "meta": {
-    "video_path": "C:\\Users\\klj1ct\\Desktop\\CycleTimeAnalysis\\data\\videos\\Eletrodo_001.mp4",
-    "video_filename": "Eletrodo_001.mp4",
-    "fps": 30.5,
-    "total_frames": 3841,
+    "video_path": "C:\\Users\\klj1ct\\Desktop\\CycleTimeAnalysis\\data\\videos\\Separacao.MP4",
+    "video_filename": "Separacao.MP4",
+    "fps": 30.469530469530472,
+    "total_frames": 3117,
     "takt_time": 10.0
   },
   "events": [],
   "rois": [],
-  "timestamp": "2026-04-27T19:36:10.861105"
+  "timestamp": "2026-09-25T10:48:47.253595"
 }
