@@ -6,7 +6,12 @@ import fs from 'fs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-// Vite plugin: serve MediaPipe WASM files from node_modules with correct MIME type
+// Subpath onde o frontend fica publicado no IIS:
+//   https://ct0devtefsrv01.br.bosch.com/CycleTimeAnalysis/
+// Troque aqui se o nome da pasta/aplicação no IIS for outro.
+const PROD_BASE = '/CycleTimeAnalysis/'
+
+// Vite plugin (apenas DEV): serve MediaPipe WASM de node_modules com MIME correto
 function mediapipeWasmPlugin() {
   const wasmDir = path.resolve(
     __dirname,
@@ -31,11 +36,12 @@ function mediapipeWasmPlugin() {
 }
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
+  base: mode === 'production' ? PROD_BASE : '/',
   plugins: [react(), mediapipeWasmPlugin()],
   build: {
-    // Build vai para backend/frontend_dist — servido pelo FastAPI em produção
-    outDir: '../backend/frontend_dist',
+    // Saída padrão: frontend/dist  ->  copiar o CONTEÚDO para o IIS
+    outDir: 'dist',
     emptyOutDir: true,
   },
   server: {
@@ -50,4 +56,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))
