@@ -17,11 +17,6 @@ from PyInstaller.utils.hooks import collect_data_files
 
 project_root = Path(SPECPATH)
 
-# Forçar PyInstaller a usar o venv do backend
-_venv_site = str(project_root / 'backend' / '.venv' / 'Lib' / 'site-packages')
-if _venv_site not in sys.path:
-    sys.path.insert(0, _venv_site)
-
 # ── Coletar dados e binários do mediapipe ─────────────────────────────────────
 mediapipe_datas    = collect_data_files('mediapipe', include_py_files=False)
 
@@ -54,11 +49,12 @@ extra_datas = [
     (str(project_root / 'backend' / 'services' / 'analytics_service.py'),'backend/services'),
     (str(project_root / 'backend' / 'services' / 'preprocess_service.py'),'backend/services'),
     (str(project_root / 'backend' / 'services' / 'storage_service.py'),  'backend/services'),
+    (str(project_root / 'backend' / 'services' / 'glove_detector.py'), 'backend/services'),
 ]
 
 a = Analysis(
     [str(project_root / 'backend' / 'run.py')],
-    pathex=[str(project_root), _venv_site],
+    pathex=[str(project_root)],
     binaries=mediapipe_binaries,
     datas=mediapipe_datas + extra_datas,
     hiddenimports=[
@@ -95,6 +91,7 @@ a = Analysis(
         'backend.services.preprocess_service',
         'backend.services._preprocess_worker',
         'backend.models.schemas',
+        'backend.services.glove_detector',
         # OpenCV
         'cv2',
         # MediaPipe internals
@@ -121,7 +118,7 @@ pyz = PYZ(a.pure)
 # ── Analysis separada para o worker (só precisa de mediapipe + cv2 + numpy) ───
 worker_a = Analysis(
     [str(project_root / 'backend' / 'worker_entry.py')],
-    pathex=[str(project_root), _venv_site],
+    pathex=[str(project_root)],
     binaries=mediapipe_binaries,
     datas=mediapipe_datas,
     hiddenimports=[
@@ -216,25 +213,29 @@ for _f in [
         shutil.copy2(str(_f), str(_worker_dir / _f.name))
         print(f"  copiado: {_f.name}", flush=True)
 
-# Stdlib do Python base
+# Stdlib do Python base (sem o site-packages global)
 _stdlib_dst = _worker_dir / 'Lib'
 if _stdlib_dst.exists():
     shutil.rmtree(str(_stdlib_dst))
-shutil.copytree(str(_base_python / 'Lib'), str(_stdlib_dst))
+shutil.copytree(
+    str(_base_python / 'Lib'), str(_stdlib_dst),
+    ignore=shutil.ignore_patterns('site-packages', '__pycache__', 'test', 'tests', 'idlelib', 'turtledemo'),
+)
 print("  copiado: Lib/ (stdlib)", flush=True)
 
-# Site-packages: mediapipe, cv2, numpy
-_sp_dst = _stdlib_dst / 'site-packages'
-_sp_dst.mkdir(exist_ok=True)
-for _pkg in ['mediapipe', 'cv2', 'numpy', 'numpy.libs']:
-    _src = _site / _pkg
-    _dst = _sp_dst / _pkg
-    if _src.exists():
-        if _dst.exists():
-            shutil.rmtree(str(_dst))
-        shutil.copytree(str(_src), str(_dst))
-        print(f"  copiado: site-packages/{_pkg}", flush=True)
+# Módulos de extensão da stdlib (_ctypes.pyd, _socket.pyd, ...)
+_dlls_dst = _worker_dir / 'DLLs'
+if _dlls_dst.exists():
+    shutil.rmtree(str(_dlls_dst))
+shutil.copytree(str(_base_python / 'DLLs'), str(_dlls_dst))
+print("  copiado: DLLs/", flush=True)
 
-# Sem pyvenv.cfg — python.exe base não precisa dele e encontra DLLs na própria pasta
+# Site-packages: tudo do venv, exceto ferramentas de build/teste
+_sp_dst = _stdlib_dst / 'site-packages'
+shutil.copytree(
+    str(_site), str(_sp_dst),
+    ignore=shutil.ignore_patterns('__pycache__', 'pip*', 'pyinstaller*', '_pytest', 'pytest*'),
+)
+print("  copiado: site-packages (venv)", flush=True)
 
 print("[spec] python_worker pronto!", flush=True)
