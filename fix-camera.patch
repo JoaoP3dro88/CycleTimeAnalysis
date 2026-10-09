@@ -1,0 +1,73 @@
+From 3cc3b6f442b650c3e89912bb8c199975112d799c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 16:19:46 +0000
+Subject: [PATCH] =?UTF-8?q?Fix:=20c=C3=A2mera=20ao=20vivo=20em=20produ?=
+ =?UTF-8?q?=C3=A7=C3=A3o=20(caminho=20do=20MediaPipe=20respeita=20a=20base?=
+ =?UTF-8?q?=20/CycleTimeAnalysis/),=20fallback=20CPU=20e=20mensagens=20de?=
+ =?UTF-8?q?=20erro?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ frontend/src/components/CameraView.jsx | 28 +++++++++++++++++++++-----
+ 1 file changed, 23 insertions(+), 5 deletions(-)
+
+diff --git a/frontend/src/components/CameraView.jsx b/frontend/src/components/CameraView.jsx
+index 850eac2..5348a8d 100644
+--- a/frontend/src/components/CameraView.jsx
++++ b/frontend/src/components/CameraView.jsx
+@@ -103,12 +103,16 @@ export default function CameraView({ fps = 30, onCreateEvent }) {
+     async function init() {
+       try {
+         setStatus('Carregando modelo MediaPipe…')
+-        const vision = await FilesetResolver.forVisionTasks('/mediapipe-wasm')
+-        const landmarker = await HandLandmarker.createFromOptions(vision, {
++        // BASE_URL = '/' no dev e '/CycleTimeAnalysis/' em produção (IIS).
++        // Caminho absoluto '/mediapipe-wasm' apontaria para a raiz do site e daria 404.
++        const wasmBase = `${import.meta.env.BASE_URL}mediapipe-wasm`
++        const vision = await FilesetResolver.forVisionTasks(wasmBase)
++
++        const makeLandmarker = (delegate) => HandLandmarker.createFromOptions(vision, {
+           baseOptions: {
+             // modelo local — sem dependência de internet
+-            modelAssetPath: '/mediapipe-wasm/hand_landmarker.task',
+-            delegate: 'GPU',
++            modelAssetPath: `${wasmBase}/hand_landmarker.task`,
++            delegate,
+           },
+           runningMode: 'VIDEO',
+           numHands: 2,
+@@ -116,6 +120,15 @@ export default function CameraView({ fps = 30, onCreateEvent }) {
+           minHandPresenceConfidence: 0.5,
+           minTrackingConfidence: 0.4,
+         })
++
++        let landmarker
++        try {
++          landmarker = await makeLandmarker('GPU')
++        } catch (gpuErr) {
++          // PCs sem WebGL/GPU (ou com driver bloqueado): cai para CPU
++          console.warn('[camera] delegate GPU indisponível, usando CPU:', gpuErr)
++          landmarker = await makeLandmarker('CPU')
++        }
+         if (cancelled) return
+         landmarkerRef.current = landmarker
+         setStatus('Abrindo câmera…')
+@@ -146,7 +159,12 @@ export default function CameraView({ fps = 30, onCreateEvent }) {
+         startDetectionLoop()
+       }
+     } catch (e) {
+-      setError(`Câmera não disponível: ${e.message ?? e}`)
++      const hint =
++        e?.name === 'NotAllowedError' ? 'Permissão negada — libere a câmera no ícone de cadeado da barra de endereço.' :
++        e?.name === 'NotFoundError'   ? 'Nenhuma câmera encontrada neste computador.' :
++        e?.name === 'NotReadableError'? 'A câmera está em uso por outro programa.' :
++        !window.isSecureContext       ? 'O navegador só libera a câmera em páginas HTTPS válidas.' : ''
++      setError(`Câmera não disponível: ${e.message ?? e}${hint ? `\n${hint}` : ''}`)
+     }
+   }
+ 
+-- 
+2.43.0
+
