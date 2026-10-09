@@ -1,117 +1,100 @@
 from __future__ import annotations
 
-import mimetypes
+import asyncio
+import os
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from ...config import settings
 from ...models.schemas import Project
+from ...services.preprocess_service import (
+    VideoTooLongError,
+    VideoUnreadableError,
+    probe_video,
+)
 from ...services.storage_service import load_project, save_project
+from ...services.upload_service import save_upload_to_temp
+from ...services.user_service import normalize_user_id, user_videos_dir
 
-router = APIRouter(prefix="/projects", tags=["projects"])
-
-# Video extensions considered safe to serve from arbitrary local paths
-_VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".ts", ".mts"}
+# Todas as rotas são escopadas por usuário: /api/users/{user_id}/projects/...
+router = APIRouter(prefix="/users/{user_id}/projects", tags=["projects"])
 
 
-def _videos_dir() -> Path:
-    d = Path(settings.data_dir) / settings.videos_dirname
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def _video_url(user_id: str, name: str) -> str:
+    return f"{settings.api_prefix}/users/{normalize_user_id(user_id)}/projects/videos/{name}"
 
 
 @router.get("/current", response_model=Project)
-def get_current_project() -> Project:
-    return load_project(settings.data_dir)
+def get_current_project(user_id: str) -> Project:
+    return load_project(user_id)
 
 
 @router.post("/reset", response_model=Project)
-def reset_project() -> Project:
-    """Reset the persisted project back to an empty/default state."""
+def reset_project(user_id: str) -> Project:
+    """Volta o projeto do usuário ao estado vazio."""
     project = Project()
-    save_project(settings.data_dir, project)
+    save_project(user_id, project)
     return project
 
 
 @router.post("/import", response_model=Project)
-def import_project(project: Project) -> Project:
-    save_project(settings.data_dir, project)
+def import_project(user_id: str, project: Project) -> Project:
+    save_project(user_id, project)
     return project
 
 
 @router.get("/export", response_model=Project)
-def export_project() -> Project:
-    return load_project(settings.data_dir)
+def export_project(user_id: str) -> Project:
+    return load_project(user_id)
 
 
 @router.get("/videos")
-def list_videos() -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
-    for p in sorted(_videos_dir().glob("*")):
-        if p.is_file():
-            out.append({"name": p.name, "url": f"{settings.api_prefix}/projects/videos/{p.name}"})
-    return out
+def list_videos(user_id: str) -> list[dict[str, str]]:
+    return [
+        {"name": p.name, "url": _video_url(user_id, p.name)}
+        for p in sorted(user_videos_dir(user_id).glob("*"))
+        if p.is_file() and not p.name.endswith(".tmp")
+    ]
 
 
 @router.get("/videos/{filename}")
-def get_video(filename: str) -> FileResponse:
-    path = (_videos_dir() / filename).resolve()
-    if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="Video not found")
+def get_video(user_id: str, filename: str) -> FileResponse:
+    videos_dir = user_videos_dir(user_id).resolve()
+    path = (videos_dir / filename).resolve()
 
-    # Basic path traversal guard: ensure it's inside the videos dir.
-    if _videos_dir().resolve() not in path.parents:
+    # Guarda contra path traversal: o arquivo precisa estar dentro da pasta do usuário.
+    if videos_dir not in path.parents:
         raise HTTPException(status_code=400, detail="Invalid filename")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Video not found")
 
     return FileResponse(path)
 
 
-@router.get("/video-by-path")
-def get_video_by_path(path: str = Query(..., description="Absolute path to the video file")) -> FileResponse:
-    """Serve a video file from an arbitrary absolute path on the local machine.
-
-    Security constraints:
-    - Path must be absolute.
-    - File must exist and be a regular file.
-    - Extension must be in the allowed video suffixes set.
-    - This endpoint is intentionally local-only (no auth needed because the
-      backend only binds to 127.0.0.1).
-    """
-    p = Path(path)
-
-    if not p.is_absolute():
-        raise HTTPException(status_code=400, detail="Path must be absolute")
-    if not p.exists() or not p.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-    if p.suffix.lower() not in _VIDEO_SUFFIXES:
-        raise HTTPException(status_code=400, detail="Not a supported video file type")
-
-    media_type = mimetypes.guess_type(str(p))[0] or "video/mp4"
-    return FileResponse(str(p), media_type=media_type)
-
-
-@router.head("/video-by-path")
-def head_video_by_path(path: str = Query(..., description="Absolute path to the video file")) -> FileResponse:
-    return get_video_by_path(path)
-
-
 @router.post("/videos/upload")
-async def upload_video(file: UploadFile = File(...)) -> dict[str, str]:
+async def upload_video(user_id: str, file: UploadFile = File(...)) -> dict[str, str]:
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
 
+    videos_dir = user_videos_dir(user_id)
     safe_name = Path(file.filename).name
-    dest = (_videos_dir() / safe_name).resolve()
 
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Empty file")
+    # 1) grava em streaming respeitando o limite de MB (413 se passar)
+    tmp = await save_upload_to_temp(file, dest_dir=videos_dir)
+    try:
+        # 2) valida a duração (limite de 10 min por padrão)
+        try:
+            await asyncio.to_thread(probe_video, str(tmp))
+        except VideoTooLongError as e:
+            raise HTTPException(status_code=413, detail=str(e))
+        except VideoUnreadableError as e:
+            raise HTTPException(status_code=422, detail=str(e))
 
-    dest.write_bytes(data)
-    return {
-        "name": safe_name,
-        "url": f"{settings.api_prefix}/projects/videos/{safe_name}",
-        "absolute_path": str(dest),
-    }
+        # 3) aceita: troca atômica para o nome final
+        os.replace(tmp, videos_dir / safe_name)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+    return {"name": safe_name, "url": _video_url(user_id, safe_name)}

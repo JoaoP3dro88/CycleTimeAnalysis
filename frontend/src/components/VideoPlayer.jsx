@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { formatTime } from '../lib/time'
-import { apiGet } from '../lib/api'
+import { apiGet, apiUrl, userPath } from '../lib/api'
 import '../styles/controls.css'
 
 export function VideoCanvas({ videoRef, src, maxHeight = '60vh' }) {
@@ -9,6 +9,7 @@ export function VideoCanvas({ videoRef, src, maxHeight = '60vh' }) {
       <video
         ref={videoRef}
         src={src || undefined}
+        crossOrigin="anonymous"
         style={{ width: '100%', height: '100%', maxHeight, background: '#000', borderRadius: '0.65rem' }}
         controls
       />
@@ -59,7 +60,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
 
   async function refreshLibrary() {
     try {
-      const vids = await apiGet('/api/projects/videos')
+      const vids = await apiGet(userPath('/projects/videos'))
       setLibrary(Array.isArray(vids) ? vids : [])
     } catch {
       // ignore; backend may be down while frontend still loads
@@ -191,7 +192,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
       if (!file) return
       const form = new FormData()
       form.append('file', file)
-      const res = await fetch('http://127.0.0.1:8000/api/projects/videos/upload', {
+      const res = await fetch(apiUrl(userPath('/projects/videos/upload')), {
         method: 'POST',
         body: form,
       })
@@ -201,9 +202,9 @@ const VideoPlayer = forwardRef(function VideoPlayer(
       }
       const saved = await res.json()
       if (saved?.url) {
-        setFileUrl(`http://127.0.0.1:8000${saved.url}`)
+        setFileUrl(apiUrl(saved.url))
         setFileName(saved.name ?? file.name)
-        setSelectedLibraryUrl(`http://127.0.0.1:8000${saved.url}`)
+        setSelectedLibraryUrl(apiUrl(saved.url))
         await refreshLibrary()
       }
     }
@@ -386,7 +387,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
           >
             <option value="">— selecionar —</option>
             {library.map((v) => (
-              <option key={v.url} value={`http://127.0.0.1:8000${v.url}`}>
+              <option key={v.url} value={apiUrl(v.url)}>
                 {v.name}
               </option>
             ))}

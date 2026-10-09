@@ -33,8 +33,91 @@ import sys
 import tempfile
 from pathlib import Path
 
+from ..config import settings
+
 # Flag: True quando rodando dentro de um bundle PyInstaller
 _IS_FROZEN = getattr(sys, "frozen", False)
+
+
+class VideoTooLongError(Exception):
+    """Vídeo excede settings.max_video_seconds."""
+
+
+class VideoUnreadableError(Exception):
+    """OpenCV não conseguiu abrir o vídeo."""
+
+
+def _too_long_message(duration_s: float | None = None) -> str:
+    limit_min = settings.max_video_seconds / 60
+    shown = f" (o vídeo tem {duration_s / 60:.1f} min)" if duration_s else ""
+    return f"O vídeo excede o limite de {limit_min:g} minutos{shown}."
+
+
+def _worker_invocation() -> tuple[list[str], dict | None, dict]:
+    """(comando-base, env, kwargs do subprocess) conforme dev ou frozen."""
+    if _IS_FROZEN:
+        _internal = Path(getattr(sys, "_MEIPASS", ""))
+        dist_dir = _internal.parent
+        worker_python = dist_dir / "python_worker" / "python.exe"
+        worker_script = _internal / "worker" / "worker_entry.py"
+        site_packages = dist_dir / "python_worker" / "Lib" / "site-packages"
+        if not worker_python.exists():
+            raise RuntimeError(f"python_worker/python.exe não encontrado em: {worker_python}")
+        if not worker_script.exists():
+            raise RuntimeError(f"worker_entry.py não encontrado em: {worker_script}")
+        env = {
+            **os.environ,
+            "PYTHONPATH": str(site_packages),
+            "PYTHONIOENCODING": "utf-8",
+            "VIRTUAL_ENV": "",
+            "PYTHONHOME": "",
+            "CTA_MAX_VIDEO_SECONDS": str(settings.max_video_seconds),
+        }
+        return [str(worker_python), str(worker_script)], env, {"creationflags": subprocess.CREATE_NO_WINDOW}
+
+    env = {**os.environ, "CTA_MAX_VIDEO_SECONDS": str(settings.max_video_seconds)}
+    return [sys.executable, str(Path(__file__).parent / "_preprocess_worker.py")], env, {}
+
+
+def _worker_output(stdout: str | None, stderr: str | None) -> str:
+    """Junta stdout + stderr do worker.
+
+    O worker escreve o erro real (JSON) no stdout, enquanto o MediaPipe despeja
+    logs no stderr — usar só um dos dois escondia a causa e o marcador
+    VIDEO_TOO_LONG.
+    """
+    parts = [(stdout or "").strip(), (stderr or "").strip()]
+    return "\n".join(p for p in parts if p) or "Sem saída do worker"
+
+
+def probe_video(video_path: str) -> dict:
+    """Lê fps / nº de frames / duração SEM rodar o MediaPipe.
+
+    Levanta VideoTooLongError se passar do limite. Se o container não
+    informa a duração, deixa passar — o worker aborta no meio do processamento.
+    """
+    base, env, kw = _worker_invocation()
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        result = subprocess.run(
+            [*base, "--probe", video_path, tmp_path],
+            capture_output=True, env=env, timeout=60, **kw,
+        )
+        if result.returncode != 0:
+            raise VideoUnreadableError(
+                "Não foi possível ler o vídeo (formato ou codec não suportado). "
+                "Use MP4 (H.264)."
+            )
+        with open(tmp_path, "r", encoding="utf-8") as f:
+            info = json.load(f)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    duration = info.get("duration_s")
+    if settings.max_video_seconds > 0 and duration and duration > settings.max_video_seconds:
+        raise VideoTooLongError(_too_long_message(duration))
+    return info
 
 
 def preprocess_video(video_path: str) -> dict:
@@ -87,6 +170,7 @@ def _preprocess_direct(video_path: str) -> dict:
             # Evitar que o python_worker use o venv errado
             "VIRTUAL_ENV": "",
             "PYTHONHOME": "",
+            "CTA_MAX_VIDEO_SECONDS": str(settings.max_video_seconds),
         }
         result = subprocess.run(
             [str(worker_python), str(worker_script), video_path, tmp_path],
@@ -102,7 +186,9 @@ def _preprocess_direct(video_path: str) -> dict:
         if stderr: print(f"[preprocess] stderr:\n{stderr}", flush=True)
 
         if result.returncode != 0:
-            detail = (stderr or stdout or "Sem saída do worker").strip()
+            detail = _worker_output(stdout, stderr)
+            if "VIDEO_TOO_LONG" in detail:
+                raise VideoTooLongError(_too_long_message())
             raise RuntimeError(f"Falha no pré-processamento (worker):\n{detail}")
 
         tmp_file = Path(tmp_path)
@@ -130,9 +216,12 @@ def _preprocess_subprocess(video_path: str) -> dict:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            env={**os.environ, "CTA_MAX_VIDEO_SECONDS": str(settings.max_video_seconds)},
         )
         if result.returncode != 0:
-            detail = (result.stderr or result.stdout or "Sem saída do worker").strip()
+            detail = _worker_output(result.stdout, result.stderr)
+            if "VIDEO_TOO_LONG" in detail:
+                raise VideoTooLongError(_too_long_message())
             raise RuntimeError(
                 f"Falha no pré-processamento\n"
                 f"Python: {python_exe}\n"

@@ -48,6 +48,12 @@ def _parse_args() -> argparse.Namespace:
 	                help="Pasta persistente (padrão: <pasta do exe>/data)")
 	ap.add_argument("--cors-origins", default=None,
 	                help="Origens permitidas separadas por vírgula, ex.: https://ct0devtefsrv01.br.bosch.com")
+	ap.add_argument("--max-video-seconds", type=int, default=None,
+	                help="Duração máxima do vídeo em segundos (padrão: 600 = 10 min)")
+	ap.add_argument("--max-video-mb", type=int, default=None,
+	                help="Tamanho máximo do vídeo em MB (padrão: 2048)")
+	ap.add_argument("--max-concurrent-preprocess", type=int, default=None,
+	                help="Pré-processamentos simultâneos (padrão: 2)")
 	ap.add_argument("--log-file", default=None,
 	                help="Se informado, redireciona stdout/stderr para este arquivo")
 	return ap.parse_args()
@@ -69,6 +75,12 @@ def main() -> None:
 		os.environ["CTA_DATA_DIR"] = _abs(args.data_dir)
 	if args.cors_origins:
 		os.environ["CTA_CORS_ORIGINS"] = args.cors_origins
+	if args.max_video_seconds is not None:
+		os.environ["CTA_MAX_VIDEO_SECONDS"] = str(args.max_video_seconds)
+	if args.max_video_mb is not None:
+		os.environ["CTA_MAX_VIDEO_MB"] = str(args.max_video_mb)
+	if args.max_concurrent_preprocess is not None:
+		os.environ["CTA_MAX_CONCURRENT_PREPROCESS"] = str(args.max_concurrent_preprocess)
 
 	try:
 		import uvicorn

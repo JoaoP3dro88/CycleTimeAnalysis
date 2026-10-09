@@ -91,6 +91,8 @@ a = Analysis(
         'backend.api.routers.analytics',
         'backend.api.routers.preprocess',
         'backend.services.storage_service',
+        'backend.services.user_service',
+        'backend.services.upload_service',
         'backend.services.analytics_service',
         'backend.services.preprocess_service',
         'backend.services._preprocess_worker',

@@ -37,12 +37,28 @@ def _default_cors_origins() -> list[str]:
 	return list(_DEV_ORIGINS)
 
 
+def _env_int(name: str, default: int) -> int:
+	try:
+		return int(os.environ.get(name, default))
+	except (TypeError, ValueError):
+		return default
+
+
 class Settings(BaseModel):
 	app_name: str = "Cycle Time Analysis API"
 	api_prefix: str = "/api"
 	cors_allow_origins: list[str] = _default_cors_origins()
 	data_dir: str = _default_data_dir()
 	videos_dirname: str = "videos"
+	users_dirname: str = "users"
+
+	# ── Limites de vídeo ────────────────────────────────────────────────────
+	# Duração máxima (segundos). Padrão: 10 minutos.
+	max_video_seconds: int = _env_int("CTA_MAX_VIDEO_SECONDS", 600)
+	# Tamanho máximo do arquivo (MB) — proteção extra de disco/memória.
+	max_video_mb: int = _env_int("CTA_MAX_VIDEO_MB", 2048)
+	# Quantos pré-processamentos (MediaPipe) rodam ao mesmo tempo; os demais esperam na fila.
+	max_concurrent_preprocess: int = _env_int("CTA_MAX_CONCURRENT_PREPROCESS", 2)
 
 
 settings = Settings()

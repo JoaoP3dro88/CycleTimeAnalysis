@@ -23,7 +23,7 @@ This UI expects the FastAPI backend to be running at:
 
 The app calls:
 
-- `GET /api/projects/current`
-- `POST /api/projects/import`
-- `GET /api/projects/export`
-- `GET /api/analytics/current`
+- `GET /api/users/{id}/projects/current`
+- `POST /api/users/{id}/projects/import`
+- `GET /api/users/{id}/projects/export`
+- `GET /api/users/{id}/analytics/current`

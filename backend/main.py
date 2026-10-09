@@ -1,7 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from pathlib import Path
 import mimetypes
 
 from .api.routers import analytics, projects, preprocess
@@ -15,6 +14,22 @@ mimetypes.add_type("video/webm", ".webm")
 def create_app() -> FastAPI:
 	app = FastAPI(title=settings.app_name)
 
+	# Rejeita uploads grandes ANTES de receber o corpo (o parse do multipart
+	# gravaria o arquivo inteiro em disco antes de qualquer validação).
+	@app.middleware("http")
+	async def limit_upload_size(request: Request, call_next):
+		if request.method == "POST" and request.url.path.endswith(("/videos/upload", "/preprocess")):
+			length = request.headers.get("content-length")
+			max_bytes = settings.max_video_mb * 1024 * 1024
+			# pequena folga para o overhead do multipart
+			if length and length.isdigit() and int(length) > max_bytes + 1024 * 1024:
+				return JSONResponse(
+					status_code=413,
+					content={"detail": f"Arquivo maior que o limite de {settings.max_video_mb} MB."},
+				)
+		return await call_next(request)
+
+	# CORS por último = camada mais externa (assim até as respostas 413 levam os headers CORS)
 	app.add_middleware(
 		CORSMiddleware,
 		allow_origins=settings.cors_allow_origins,
@@ -27,31 +42,10 @@ def create_app() -> FastAPI:
 	app.include_router(analytics.router,   prefix=settings.api_prefix)
 	app.include_router(preprocess.router,  prefix=settings.api_prefix)
 
-	# Static mount for uploaded videos
-	videos_dir = Path(settings.data_dir, settings.videos_dirname)
-	videos_dir.mkdir(parents=True, exist_ok=True)
-	app.mount(
-		f"{settings.api_prefix}/projects/videos-static",
-		StaticFiles(directory=str(videos_dir)),
-		name="videos",
-	)
-
 	@app.get("/health")
 	@app.get(f"{settings.api_prefix}/health")
 	def health() -> dict[str, str]:
 		return {"status": "ok"}
-
-	# ── Compatibilidade com o frontend antigo (modo desktop) ─────────────────
-	# Em servidor NÃO pode encerrar o processo: um usuário fechando a aba
-	# derrubaria a API para todos. Mantidos como no-op para o frontend não
-	# receber erro enquanto as chamadas não forem removidas de lá.
-	@app.post("/api/heartbeat", include_in_schema=False)
-	def heartbeat() -> dict[str, str]:
-		return {"status": "ok"}
-
-	@app.post("/api/shutdown", include_in_schema=False)
-	def shutdown() -> dict[str, str]:
-		return {"status": "ignored"}
 
 	# O frontend (React) é servido pelo IIS, não por esta API.
 	return app

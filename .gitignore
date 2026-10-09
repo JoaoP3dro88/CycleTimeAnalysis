@@ -88,6 +88,8 @@ Thumbs.db
 # =====================
 *.env
 .env.*
+# Exceção: config do build do frontend (sem segredos — só a URL da API e o limite de vídeo)
+!frontend/.env.production
 !.env.example
 
 # =====================
@@ -100,6 +102,11 @@ logs/
 # Dados do projeto (opcional - remover se quiser versionar)
 # =====================
 data/videos/
+data/users/
+data/project.json
+build_log.txt
+__pycache__/
+*.pyc
 *.mp4
 *.avi
 *.mov

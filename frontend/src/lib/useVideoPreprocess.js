@@ -13,7 +13,7 @@
  * poder enviar como multipart ao backend.
  */
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { apiPostFile } from './api'
+import { apiPostFile, userPath } from './api'
 
 /**
  * @param {{ src: string, fps: number }} opts
@@ -26,6 +26,7 @@ export function useVideoPreprocess({ src, fps }) {
 
   const [status,   setStatus]   = useState('idle')
   const [progress, setProgress] = useState(0)
+  const [errorMessage, setErrorMessage] = useState('')
 
   const cancel = useCallback(() => { cancelRef.current = true }, [])
 
@@ -45,6 +46,7 @@ export function useVideoPreprocess({ src, fps }) {
       cacheRef.current  = new Map()
       setStatus('uploading')
       setProgress(0)
+      setErrorMessage('')
 
       try {
         // 1. Converter blob: URL → Blob real
@@ -63,7 +65,7 @@ export function useVideoPreprocess({ src, fps }) {
         const fakeTimer = startFakeProgress(setProgress)
 
         const t0   = performance.now()
-        const data = await apiPostFile('/api/preprocess', blob, 'video.mp4')
+        const data = await apiPostFile(userPath('/preprocess'), blob, 'video.mp4')
         const secs = ((performance.now() - t0) / 1000).toFixed(1)
 
         clearInterval(fakeTimer)
@@ -108,6 +110,8 @@ export function useVideoPreprocess({ src, fps }) {
         // Extrair a mensagem de detalhe do backend se disponível
         const detail = err.message ?? String(err)
         console.error('[preprocess] Detalhe completo:', detail)
+        // 413/422 = vídeo recusado (muito longo/grande/ilegível): mostra a mensagem do servidor
+        setErrorMessage(err?.status === 413 || err?.status === 422 ? (err.detail ?? '') : '')
         setStatus('error')
       }
     }, 100)
@@ -119,7 +123,7 @@ export function useVideoPreprocess({ src, fps }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src])
 
-  return { cacheRef, status, progress, cancel }
+  return { cacheRef, status, progress, cancel, errorMessage }
 }
 
 // ── Fake progress enquanto o backend processa ─────────────────────────────────

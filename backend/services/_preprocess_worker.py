@@ -156,6 +156,33 @@ def _pseudo_landmarks_from_blobs(blobs, frame_w: int, frame_h: int):
     return landmarks_out, handedness_out
 
 
+def _max_video_seconds() -> float:
+    """Limite de duração (s). Vem da env CTA_MAX_VIDEO_SECONDS; 0 = sem limite."""
+    try:
+        return float(os.environ.get("CTA_MAX_VIDEO_SECONDS", "600"))
+    except ValueError:
+        return 600.0
+
+
+def probe_video(video_path: str, out_path: str) -> None:
+    """Lê só os metadados (sem MediaPipe) e grava {fps, total_frames, duration_s}.
+
+    duration_s = None quando o container não informa o nº de frames.
+    """
+    import cv2
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError("Nao foi possivel abrir o video (formato/codec nao suportado).")
+    fps    = cap.get(cv2.CAP_PROP_FPS) or 0.0
+    frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0
+    cap.release()
+
+    duration = (frames / fps) if (fps > 0 and frames > 0) else None
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump({"fps": fps, "total_frames": int(frames), "duration_s": duration}, f)
+
+
 def run_worker(video_path: str, out_path: str) -> None:
     """Processa o vídeo e grava o resultado em out_path (JSON)."""
     import cv2
@@ -168,6 +195,7 @@ def run_worker(video_path: str, out_path: str) -> None:
         raise RuntimeError(f"Nao foi possivel abrir: {video_path}")
 
     fps         = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    max_frames  = int(_max_video_seconds() * fps) if _max_video_seconds() > 0 else None
     frame_w     = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_h     = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     frames      = {}
@@ -190,6 +218,13 @@ def run_worker(video_path: str, out_path: str) -> None:
             ret, frame = cap.read()
             if not ret:
                 break
+
+            # Guarda extra: vídeos cujo container não informa a duração
+            # só são detectados aqui.
+            if max_frames is not None and frame_index >= max_frames:
+                raise RuntimeError(
+                    f"VIDEO_TOO_LONG: o video passa de {_max_video_seconds():.0f} s."
+                )
 
             rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             result = hands.process(rgb)
@@ -250,11 +285,15 @@ def run_worker(video_path: str, out_path: str) -> None:
 
 
 def main():
-    if len(sys.argv) < 3:
-        print(json.dumps({"error": "Uso: worker.py <video> <out.json>"}))
+    args = sys.argv[1:]
+    probe = bool(args) and args[0] == "--probe"
+    if probe:
+        args = args[1:]
+    if len(args) < 2:
+        print(json.dumps({"error": "Uso: worker.py [--probe] <video> <out.json>"}))
         sys.exit(1)
     try:
-        run_worker(sys.argv[1], sys.argv[2])
+        (probe_video if probe else run_worker)(args[0], args[1])
         print("OK")
     except Exception as e:
         print(json.dumps({"error": str(e)}))

@@ -34,18 +34,26 @@ for _dll_dir in [_worker_mp_python, _worker_cv2, _internal_mp, _internal, _dist_
 
 
 def main():
-    if len(sys.argv) < 3:
-        print("Uso: python worker_entry.py <video_path> <out_path>", file=sys.stderr)
+    args = sys.argv[1:]
+    probe = bool(args) and args[0] == "--probe"
+    if probe:
+        args = args[1:]
+    if len(args) < 2:
+        print("Uso: python worker_entry.py [--probe] <video_path> <out_path>", file=sys.stderr)
         sys.exit(1)
 
-    video_path = sys.argv[1]
-    out_path   = sys.argv[2]
+    video_path = args[0]
+    out_path   = args[1]
 
     print(f"[worker] _internal: {_internal}", flush=True)
     print(f"[worker] sys.path: {sys.path[:3]}", flush=True)
 
-    from backend.services._preprocess_worker import run_worker
-    run_worker(video_path, out_path)
+    if probe:
+        from backend.services._preprocess_worker import probe_video
+        probe_video(video_path, out_path)
+    else:
+        from backend.services._preprocess_worker import run_worker
+        run_worker(video_path, out_path)
 
 
 if __name__ == "__main__":

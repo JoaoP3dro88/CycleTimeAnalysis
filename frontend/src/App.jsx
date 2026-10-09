@@ -11,7 +11,9 @@ import VideoPlayer, { VideoCanvas } from './components/VideoPlayer'
 import CameraView from './components/CameraView'
 import VideoAnalyzer from './components/VideoAnalyzer'
 import Dashboard from './components/Dashboard'
-import { apiGet, apiPost } from './lib/api'
+import { apiGet, apiPost, apiUrl, userPath } from './lib/api'
+import { getUserId, setUserId, isValidUserId } from './lib/userId'
+import { MAX_VIDEO_SECONDS, getVideoDuration, tooLongMessage } from './lib/limits'
 import { useVideoPreprocess } from './lib/useVideoPreprocess'
 
 // ─── Reusable header button style ────────────────────────────────────────────
@@ -38,18 +40,8 @@ function App() {
   const filePickerRef = useRef(null)
   const analyzerRef  = useRef(null)
 
-  // ── Heartbeat: mantém o servidor vivo e encerra ao fechar ─────────────────
-  useEffect(() => {
-    const ping = () => fetch('/api/heartbeat', { method: 'POST' }).catch(() => {})
-    ping()
-    const interval = setInterval(ping, 5000)
-    const onUnload = () => navigator.sendBeacon('/api/shutdown')
-    window.addEventListener('beforeunload', onUnload)
-    return () => {
-      clearInterval(interval)
-      window.removeEventListener('beforeunload', onUnload)
-    }
-  }, [])
+  // ID do workspace deste usuário (isola projeto e vídeos no servidor)
+  const [userId] = useState(() => getUserId())
 
   const [project,    setProject]    = useState(null)
   const [analytics,  setAnalytics]  = useState(null)
@@ -93,6 +85,7 @@ function App() {
     cacheRef: preprocessCacheRef,
     status:   preprocessStatus,
     progress: preprocessProgress,
+    errorMessage: preprocessErrorMessage,
   } = useVideoPreprocess({ src: trackingMode === 'tracking' ? videoSrc : '', fps })
 
   // Show a toast when preprocess finishes or fails, then auto-dismiss
@@ -107,8 +100,8 @@ function App() {
 
   async function refreshAnalytics(p) {
     try {
-      await apiPost('/api/projects/import', p)
-      const a = await apiGet('/api/analytics/current')
+      await apiPost(userPath('/projects/import'), p)
+      const a = await apiGet(userPath('/analytics/current'))
       setAnalytics(a)
     } catch { /* non-fatal */ }
   }
@@ -169,31 +162,19 @@ function App() {
 
       await refreshAnalytics(parsed)
 
-      // Tenta recarregar o vídeo automaticamente
-      const videoPath     = parsed.meta?.video_path
+      // Tenta recarregar o vídeo automaticamente (da biblioteca do usuário)
       const videoFilename = parsed.meta?.video_filename
-      if (videoPath || videoFilename) {
+      if (videoFilename) {
         let loaded = false
-        if (videoPath) {
-          try {
-            const testUrl = `/api/projects/video-by-path?path=${encodeURIComponent(videoPath)}`
-            if ((await fetch(testUrl, { method: 'HEAD' })).ok) {
-              setVideoSrc(testUrl)
-              loaded = true
-            }
-          } catch { /* fall through */ }
-        }
-        if (!loaded && videoFilename) {
-          try {
-            const match = (await apiGet('/api/projects/videos')).find(v => v.name === videoFilename)
-            if (match) {
-              setVideoSrc(match.url)
-              loaded = true
-            }
-          } catch { /* fall through */ }
-        }
+        try {
+          const match = (await apiGet(userPath('/projects/videos'))).find(v => v.name === videoFilename)
+          if (match) {
+            setVideoSrc(apiUrl(match.url))
+            loaded = true
+          }
+        } catch { /* fall through */ }
         if (!loaded) {
-          setError(`Vídeo "${videoFilename ?? videoPath}" não encontrado.\nCarregue o vídeo manualmente.`)
+          setError(`Vídeo "${videoFilename}" não encontrado.\nCarregue o vídeo manualmente.`)
         }
       }
     } catch (e) {
@@ -232,9 +213,21 @@ function App() {
   function persistVideoMeta(blobUrl, file, detectedFps, totalFrames) {
     const formData = new FormData()
     formData.append('file', file)
-    fetch('/api/projects/videos/upload', { method: 'POST', body: formData })
-      .then((r) => r.ok ? r.json() : null)
+    fetch(apiUrl(userPath('/projects/videos/upload')), { method: 'POST', body: formData })
+      .then(async (r) => {
+        if (r.ok) return r.json()
+        if (r.status === 413 || r.status === 422) {
+          // Servidor recusou (muito longo / grande / ilegível): descarta o vídeo
+          let detail = ''
+          try { detail = (await r.json()).detail } catch { /* sem corpo */ }
+          setVideoSrc('')
+          setError(detail || 'O servidor recusou o vídeo.')
+          return { rejected: true }
+        }
+        return null
+      })
       .then((result) => {
+        if (result?.rejected) return
         setProject((prev) => {
           const base = prev ?? { meta: { fps: detectedFps, total_frames: totalFrames, takt_time: metaTakt }, events: [], rois: [] }
           const nextProject = {
@@ -244,7 +237,7 @@ function App() {
               fps: detectedFps,
               total_frames: totalFrames,
               takt_time: base.meta?.takt_time ?? metaTakt,
-              ...(result ? { video_filename: result.name, video_path: result.absolute_path } : {}),
+              ...(result ? { video_filename: result.name } : {}),
             },
           }
           refreshAnalytics(nextProject)
@@ -274,6 +267,23 @@ function App() {
     const next = { ...base, meta: { ...base.meta, fps: newFps, takt_time: newTakt } }
     updateProject(next)
   }, [project, metaFps, metaTakt]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function copyUserId() {
+    navigator.clipboard?.writeText(userId).catch(() => {})
+  }
+
+  function changeUserId() {
+    const next = window.prompt('Cole o ID do workspace que deseja abrir neste navegador:')
+    if (!next) return
+    const id = next.trim()
+    if (!isValidUserId(id)) {
+      setError('ID inválido: use 4 a 64 letras, números, "-" ou "_".')
+      return
+    }
+    if (unsaved && !window.confirm('Há alterações não salvas. Trocar de ID vai descartá-las. Continuar?')) return
+    setUserId(id)
+    window.location.reload()
+  }
 
   // ── shared input style (used in settings panel) ──────────────────────────
   const inputStyle = {
@@ -326,9 +336,19 @@ function App() {
               ref={filePickerRef}
               type="file"
               accept="video/*"
-              onChange={(e) => {
-                const file = e.target.files?.[0]
+              onChange={async (e) => {
+                const input = e.target
+                const file = input.files?.[0]
                 if (!file) return
+
+                // Limite de duração (10 min): recusa antes de carregar/enviar
+                const durationS = await getVideoDuration(file)
+                if (durationS != null && durationS > MAX_VIDEO_SECONDS) {
+                  setError(tooLongMessage(durationS))
+                  input.value = ''
+                  return
+                }
+
                 const url = URL.createObjectURL(file)
                 setVideoSrc(url)
                 setLoopRange({ active: false, startFrame: 0, endFrame: 0 })
@@ -417,6 +437,15 @@ function App() {
               style={{ width: '5rem', ...inputStyle }}
             />
           </label>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: '#aaa', flexWrap: 'wrap' }}>
+            Meu ID:
+            <code style={{ ...inputStyle, userSelect: 'all' }}>{userId}</code>
+            <button style={{ ...hBtn(), fontSize: '0.75rem' }} onClick={copyUserId}>Copiar</button>
+            <button style={{ ...hBtn(), fontSize: '0.75rem' }} onClick={changeUserId}>Usar outro ID</button>
+          </span>
+          <span style={{ fontSize: '0.75rem', color: '#777' }}>
+            Vídeo: máx. {MAX_VIDEO_SECONDS / 60} min
+          </span>
           <button style={{ ...hBtn(), fontSize: '0.75rem' }} onClick={() => setShowSettings(false)}><X size={13} strokeWidth={2} /> Fechar</button>
         </div>
       )}
@@ -452,7 +481,7 @@ function App() {
       )}
       {preprocessToast === 'error' && (
         <div style={{ margin: '0 0.75rem 0.2rem', padding: '0.3rem 0.6rem', borderRadius: '0.4rem', background: 'rgba(255,127,14,0.1)', border: '1px solid rgba(255,127,14,0.4)', color: '#ffb347', fontSize: '0.72rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}><AlertTriangle size={13} strokeWidth={2} /> Pré-processamento falhou — a usar detecção em tempo real</span>
+          <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}><AlertTriangle size={13} strokeWidth={2} /> {preprocessErrorMessage ? `${preprocessErrorMessage} A usar detecção em tempo real.` : 'Pré-processamento falhou — a usar detecção em tempo real'}</span>
           <button onClick={() => setPreprocessToast(null)} style={{ background: 'none', border: 'none', color: '#ffb347', cursor: 'pointer', lineHeight: 1, padding: '0 0.2rem', display: 'flex', alignItems: 'center' }}><X size={13} strokeWidth={2} /></button>
         </div>
       )}
