@@ -103,12 +103,16 @@ export default function CameraView({ fps = 30, onCreateEvent }) {
     async function init() {
       try {
         setStatus('Carregando modelo MediaPipe…')
-        const vision = await FilesetResolver.forVisionTasks('/mediapipe-wasm')
-        const landmarker = await HandLandmarker.createFromOptions(vision, {
+        // BASE_URL = '/' no dev e '/CycleTimeAnalysis/' em produção (IIS).
+        // Caminho absoluto '/mediapipe-wasm' apontaria para a raiz do site e daria 404.
+        const wasmBase = `${import.meta.env.BASE_URL}mediapipe-wasm`
+        const vision = await FilesetResolver.forVisionTasks(wasmBase)
+
+        const makeLandmarker = (delegate) => HandLandmarker.createFromOptions(vision, {
           baseOptions: {
             // modelo local — sem dependência de internet
-            modelAssetPath: '/mediapipe-wasm/hand_landmarker.task',
-            delegate: 'GPU',
+            modelAssetPath: `${wasmBase}/hand_landmarker.task`,
+            delegate,
           },
           runningMode: 'VIDEO',
           numHands: 2,
@@ -116,6 +120,15 @@ export default function CameraView({ fps = 30, onCreateEvent }) {
           minHandPresenceConfidence: 0.5,
           minTrackingConfidence: 0.4,
         })
+
+        let landmarker
+        try {
+          landmarker = await makeLandmarker('GPU')
+        } catch (gpuErr) {
+          // PCs sem WebGL/GPU (ou com driver bloqueado): cai para CPU
+          console.warn('[camera] delegate GPU indisponível, usando CPU:', gpuErr)
+          landmarker = await makeLandmarker('CPU')
+        }
         if (cancelled) return
         landmarkerRef.current = landmarker
         setStatus('Abrindo câmera…')
@@ -146,7 +159,12 @@ export default function CameraView({ fps = 30, onCreateEvent }) {
         startDetectionLoop()
       }
     } catch (e) {
-      setError(`Câmera não disponível: ${e.message ?? e}`)
+      const hint =
+        e?.name === 'NotAllowedError' ? 'Permissão negada — libere a câmera no ícone de cadeado da barra de endereço.' :
+        e?.name === 'NotFoundError'   ? 'Nenhuma câmera encontrada neste computador.' :
+        e?.name === 'NotReadableError'? 'A câmera está em uso por outro programa.' :
+        !window.isSecureContext       ? 'O navegador só libera a câmera em páginas HTTPS válidas.' : ''
+      setError(`Câmera não disponível: ${e.message ?? e}${hint ? `\n${hint}` : ''}`)
     }
   }
 
