@@ -1,0 +1,3719 @@
+From a67038dcde7ca4d25c3540e65f9d33c57940ad1f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 11:05:48 +0000
+Subject: [PATCH] =?UTF-8?q?Multi-usu=C3=A1rio=20por=20ID,=20limite=20de=20?=
+ =?UTF-8?q?v=C3=ADdeo=20(10=20min=20/=202=20GB)=20e=20corre=C3=A7=C3=B5es?=
+ =?UTF-8?q?=20para=20deploy?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Rotas escopadas por usuário: /api/users/{id}/... (projeto + vídeos em data/users/u_<id>/)
+- Escrita atômica do project.json com lock por usuário
+- Limite de duração (CTA_MAX_VIDEO_SECONDS=600) e tamanho (CTA_MAX_VIDEO_MB=2048):
+  validação no frontend, no upload e no preprocess (413/422); guarda extra dentro do worker
+- Upload em streaming (sem carregar o vídeo na RAM) + rejeição por Content-Length
+- Fila de pré-processamento (CTA_MAX_CONCURRENT_PREPROCESS=2)
+- Remove video-by-path (lia caminhos arbitrários), heartbeat/shutdown e static mount compartilhado
+- Frontend: URLs fixas 127.0.0.1 -> apiUrl(), crossOrigin no <video>, painel de ID em Config
+- Fix: worker perdia o erro real (stdout) quando o MediaPipe escrevia no stderr
+- Adiciona frontend/.env.production, deploy/DEPLOY.md, testes; tira __pycache__/build_log do git
+---
+ .gitignore                                    |   7 +
+ backend/README.md                             |  45 ++++--
+ backend/__pycache__/__init__.cpython-311.pyc  | Bin 170 -> 0 bytes
+ backend/__pycache__/__init__.cpython-312.pyc  | Bin 158 -> 0 bytes
+ backend/__pycache__/__init__.cpython-314.pyc  | Bin 160 -> 0 bytes
+ backend/__pycache__/config.cpython-311.pyc    | Bin 948 -> 0 bytes
+ backend/__pycache__/config.cpython-312.pyc    | Bin 813 -> 0 bytes
+ backend/__pycache__/main.cpython-311.pyc      | Bin 7648 -> 0 bytes
+ backend/__pycache__/main.cpython-312.pyc      | Bin 7646 -> 0 bytes
+ backend/__pycache__/run.cpython-311.pyc       | Bin 7007 -> 0 bytes
+ backend/__pycache__/run.cpython-314.pyc       | Bin 6856 -> 0 bytes
+ .../api/__pycache__/__init__.cpython-311.pyc  | Bin 174 -> 0 bytes
+ .../api/__pycache__/__init__.cpython-312.pyc  | Bin 162 -> 0 bytes
+ .../__pycache__/__init__.cpython-311.pyc      | Bin 182 -> 0 bytes
+ .../__pycache__/__init__.cpython-312.pyc      | Bin 170 -> 0 bytes
+ .../__pycache__/analytics.cpython-311.pyc     | Bin 1123 -> 0 bytes
+ .../__pycache__/analytics.cpython-312.pyc     | Bin 968 -> 0 bytes
+ .../__pycache__/preprocess.cpython-311.pyc    | Bin 2978 -> 0 bytes
+ .../__pycache__/preprocess.cpython-312.pyc    | Bin 2647 -> 0 bytes
+ .../__pycache__/projects.cpython-311.pyc      | Bin 7198 -> 0 bytes
+ .../__pycache__/projects.cpython-312.pyc      | Bin 6283 -> 0 bytes
+ backend/api/routers/analytics.py              |   7 +-
+ backend/api/routers/preprocess.py             |  67 +++++----
+ backend/api/routers/projects.py               | 129 ++++++++----------
+ backend/config.py                             |  16 +++
+ backend/main.py                               |  42 +++---
+ .../__pycache__/__init__.cpython-312.pyc      | Bin 165 -> 0 bytes
+ .../__pycache__/schemas.cpython-311.pyc       | Bin 6697 -> 0 bytes
+ .../__pycache__/schemas.cpython-312.pyc       | Bin 5354 -> 0 bytes
+ backend/run.py                                |  12 ++
+ .../__pycache__/__init__.cpython-311.pyc      | Bin 179 -> 0 bytes
+ .../__pycache__/__init__.cpython-312.pyc      | Bin 167 -> 0 bytes
+ .../analytics_service.cpython-311.pyc         | Bin 9133 -> 0 bytes
+ .../analytics_service.cpython-312.pyc         | Bin 7091 -> 0 bytes
+ .../glove_detector.cpython-311.pyc            | Bin 8414 -> 0 bytes
+ .../glove_detector.cpython-314.pyc            | Bin 9060 -> 0 bytes
+ .../preprocess_service.cpython-311.pyc        | Bin 7626 -> 0 bytes
+ .../preprocess_service.cpython-312.pyc        | Bin 4095 -> 0 bytes
+ .../storage_service.cpython-311.pyc           | Bin 1975 -> 0 bytes
+ .../storage_service.cpython-312.pyc           | Bin 1684 -> 0 bytes
+ backend/services/_preprocess_worker.py        |  45 +++++-
+ backend/services/preprocess_service.py        |  93 ++++++++++++-
+ backend/services/storage_service.py           |  45 +++---
+ backend/services/upload_service.py            |  52 +++++++
+ backend/services/user_service.py              |  58 ++++++++
+ .../__pycache__/__init__.cpython-312.pyc      | Bin 164 -> 0 bytes
+ ...ytics_service.cpython-312-pytest-9.0.2.pyc | Bin 56232 -> 0 bytes
+ backend/tests/test_users_and_limits.py        | 111 +++++++++++++++
+ backend/worker_entry.py                       |  20 ++-
+ build_log.txt                                 | Bin 56660 -> 0 bytes
+ cycletime_api.spec                            |   2 +
+ data/project.json                             |  12 --
+ deploy/DEPLOY.md                              |  96 +++++++++++++
+ frontend/.env.production                      |   5 +
+ frontend/README.md                            |   8 +-
+ frontend/src/App.jsx                          | 115 ++++++++++------
+ frontend/src/components/VideoPlayer.jsx       |  13 +-
+ frontend/src/lib/api.js                       |  43 ++++--
+ frontend/src/lib/limits.js                    |  32 +++++
+ frontend/src/lib/useVideoPreprocess.js        |  10 +-
+ frontend/src/lib/userId.js                    |  42 ++++++
+ 61 files changed, 876 insertions(+), 251 deletions(-)
+ delete mode 100644 backend/__pycache__/__init__.cpython-311.pyc
+ delete mode 100644 backend/__pycache__/__init__.cpython-312.pyc
+ delete mode 100644 backend/__pycache__/__init__.cpython-314.pyc
+ delete mode 100644 backend/__pycache__/config.cpython-311.pyc
+ delete mode 100644 backend/__pycache__/config.cpython-312.pyc
+ delete mode 100644 backend/__pycache__/main.cpython-311.pyc
+ delete mode 100644 backend/__pycache__/main.cpython-312.pyc
+ delete mode 100644 backend/__pycache__/run.cpython-311.pyc
+ delete mode 100644 backend/__pycache__/run.cpython-314.pyc
+ delete mode 100644 backend/api/__pycache__/__init__.cpython-311.pyc
+ delete mode 100644 backend/api/__pycache__/__init__.cpython-312.pyc
+ delete mode 100644 backend/api/routers/__pycache__/__init__.cpython-311.pyc
+ delete mode 100644 backend/api/routers/__pycache__/__init__.cpython-312.pyc
+ delete mode 100644 backend/api/routers/__pycache__/analytics.cpython-311.pyc
+ delete mode 100644 backend/api/routers/__pycache__/analytics.cpython-312.pyc
+ delete mode 100644 backend/api/routers/__pycache__/preprocess.cpython-311.pyc
+ delete mode 100644 backend/api/routers/__pycache__/preprocess.cpython-312.pyc
+ delete mode 100644 backend/api/routers/__pycache__/projects.cpython-311.pyc
+ delete mode 100644 backend/api/routers/__pycache__/projects.cpython-312.pyc
+ delete mode 100644 backend/models/__pycache__/__init__.cpython-312.pyc
+ delete mode 100644 backend/models/__pycache__/schemas.cpython-311.pyc
+ delete mode 100644 backend/models/__pycache__/schemas.cpython-312.pyc
+ delete mode 100644 backend/services/__pycache__/__init__.cpython-311.pyc
+ delete mode 100644 backend/services/__pycache__/__init__.cpython-312.pyc
+ delete mode 100644 backend/services/__pycache__/analytics_service.cpython-311.pyc
+ delete mode 100644 backend/services/__pycache__/analytics_service.cpython-312.pyc
+ delete mode 100644 backend/services/__pycache__/glove_detector.cpython-311.pyc
+ delete mode 100644 backend/services/__pycache__/glove_detector.cpython-314.pyc
+ delete mode 100644 backend/services/__pycache__/preprocess_service.cpython-311.pyc
+ delete mode 100644 backend/services/__pycache__/preprocess_service.cpython-312.pyc
+ delete mode 100644 backend/services/__pycache__/storage_service.cpython-311.pyc
+ delete mode 100644 backend/services/__pycache__/storage_service.cpython-312.pyc
+ create mode 100644 backend/services/upload_service.py
+ create mode 100644 backend/services/user_service.py
+ delete mode 100644 backend/tests/__pycache__/__init__.cpython-312.pyc
+ delete mode 100644 backend/tests/__pycache__/test_analytics_service.cpython-312-pytest-9.0.2.pyc
+ create mode 100644 backend/tests/test_users_and_limits.py
+ delete mode 100644 build_log.txt
+ delete mode 100644 data/project.json
+ create mode 100644 deploy/DEPLOY.md
+ create mode 100644 frontend/.env.production
+ create mode 100644 frontend/src/lib/limits.js
+ create mode 100644 frontend/src/lib/userId.js
+
+diff --git a/.gitignore b/.gitignore
+index 8ea362f..082550f 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -88,6 +88,8 @@ Thumbs.db
+ # =====================
+ *.env
+ .env.*
++# Exceção: config do build do frontend (sem segredos — só a URL da API e o limite de vídeo)
++!frontend/.env.production
+ !.env.example
+ 
+ # =====================
+@@ -100,6 +102,11 @@ logs/
+ # Dados do projeto (opcional - remover se quiser versionar)
+ # =====================
+ data/videos/
++data/users/
++data/project.json
++build_log.txt
++__pycache__/
++*.pyc
+ *.mp4
+ *.avi
+ *.mov
+diff --git a/backend/README.md b/backend/README.md
+index cdde57c..e2dc4e1 100644
+--- a/backend/README.md
++++ b/backend/README.md
+@@ -4,18 +4,31 @@ This folder contains the Python backend API that powers the Cycle Time Analysis
+ 
+ ## What you get
+ 
+-- FastAPI app with CORS enabled for the Vite dev server
+-- Simple JSON persistence to `backend/data/project.json`
+-- Endpoints:
+-  - `GET /health`
+-  - `GET /api/projects/current`
+-  - `POST /api/projects/import`
+-  - `GET /api/projects/export`
+-  - `GET /api/analytics/current`
+-  - Video persistence (solution B):
+-    - `POST /api/projects/videos/upload` (multipart form-data)
+-    - `GET /api/projects/videos` (list)
+-    - `GET /api/projects/videos/{filename}` (download/stream)
++- FastAPI app with CORS enabled for the Vite dev server (and `--cors-origins` in production)
++- **Multi-user workspaces**: every route is scoped by a user ID — data lives in
++  `data/users/u_<id>/project.json` and `data/users/u_<id>/videos/`
++- **Video limits**: max duration (default 10 min) and max size (default 2048 MB)
++- Endpoints (`{user_id}` = 4–64 chars `A-Z a-z 0-9 _ -`, case-insensitive):
++  - `GET  /health`
++  - `GET  /api/users/{user_id}/projects/current`
++  - `POST /api/users/{user_id}/projects/import`
++  - `GET  /api/users/{user_id}/projects/export`
++  - `POST /api/users/{user_id}/projects/reset`
++  - `GET  /api/users/{user_id}/analytics/current`
++  - `POST /api/users/{user_id}/projects/videos/upload` (multipart; 413 if too long/big, 422 if unreadable)
++  - `GET  /api/users/{user_id}/projects/videos` (list)
++  - `GET  /api/users/{user_id}/projects/videos/{filename}` (stream)
++  - `POST /api/users/{user_id}/preprocess` (MediaPipe; queued, max N at once)
++
++## Limits (settings)
++
++| Setting | CLI flag (`run.py`) | Env var | Default |
++|---|---|---|---|
++| Max video duration (s) | `--max-video-seconds` | `CTA_MAX_VIDEO_SECONDS` | 600 (10 min) |
++| Max video size (MB) | `--max-video-mb` | `CTA_MAX_VIDEO_MB` | 2048 |
++| Simultaneous preprocess jobs | `--max-concurrent-preprocess` | `CTA_MAX_CONCURRENT_PREPROCESS` | 2 |
++
++Keep `VITE_MAX_VIDEO_SECONDS` (frontend/.env.production) equal to the backend duration limit.
+ 
+ ## Run (Windows PowerShell)
+ 
+@@ -34,10 +47,16 @@ Open:
+ - API docs: http://127.0.0.1:8000/docs
+ - Health check: http://127.0.0.1:8000/health
+ 
++## Tests
++
++```powershell
++pytest backend/tests -q
++```
++
+ ## About video persistence
+ 
+ Browsers can't reliably reopen a local video file path after refresh (security model).
+ This backend supports a "workspace library":
+ 
+-- When you upload a video, it's copied to `backend/data/videos/`
++- When you upload a video, it's copied to the user's own folder `data/users/u_<id>/videos/`
+ - The frontend can then reload the same video by URL across sessions
+diff --git a/backend/__pycache__/__init__.cpython-311.pyc b/backend/__pycache__/__init__.cpython-311.pyc
+deleted file mode 100644
+index 6af321545f9f044be5f9564b803aebc32eebc37e..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 170
+zcmZ3^%ge<81Qk^USs?l`h=2h`DC095kTIPhg&~+hlhJP_LlF~@{~09t%huT{CbT%U
+zs5mA&C(AIoB*rDRIJ+djAjY{eIVUwFGdI;SFEOXGII}n=DKR-aH7_M5K0Y%qvm`!V
+oub}c5hfQvNN@-52T@fqLG?0D8{6OLZGb1D82L>2X#0(Sz0M7O)djJ3c
+
+diff --git a/backend/__pycache__/__init__.cpython-312.pyc b/backend/__pycache__/__init__.cpython-312.pyc
+deleted file mode 100644
+index 3e08296d2e955dfeb14773e86298b064c88cb7a8..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 158
+zcmX@j%ge<81Qk^USs?l`h(HIQS%4zb87dhx8U0o=6fpsLpFwJV**aUrgche36~|=f
+zWEm!x#JHpuXP4v`#5h+b=cI;Y=B7I4CFWEXXBNjKB_?O5=B32M$7kkcmc+;F6;%G>
+fu*uC&Da}c>D`Ewj#t6j4AjU^#Mn=XWW*`dy9mgkc
+
+diff --git a/backend/__pycache__/__init__.cpython-314.pyc b/backend/__pycache__/__init__.cpython-314.pyc
+deleted file mode 100644
+index 67b0dac2aa28d77ee0d003158fd6446cd6c9c2f9..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 160
+zcmdPq<K<!if{LnwED-$|M8E(el<}Dj$Y@{)Vo+w#Wb|9fP{ah}e+Eh3vURqK2`x@7
+zDvrs{$udkXiE&9S&MwI>h;gn=&Pff)%uRL7OU$V(&Mb~eN=(j9%}a@ikI&4@EQycT
+jE2zB1VUwGmQks)$SHuc54P;+2i1CS;k&&^88OQ<vsuU)9
+
+diff --git a/backend/__pycache__/config.cpython-311.pyc b/backend/__pycache__/config.cpython-311.pyc
+deleted file mode 100644
+index 9cc4bbd9f39b83c7083ff97f98838d30a180e25a..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 948
+zcmZuwK~EDw6rS1LmTf5-DF({{8a<T*wSvJ^Vgi^L4-zAAaMNTm?hIvNySwfzNb98s
+z4>j??!3579For)<Zp~ahc`LyaC*MpdN_1xS+xLC%+nJY_*>7WGSp?&t747U}gnlS8
+z9I4CTd<B9d#1O+iYG4OrWT0n=86OZcIX*TKI)P^}9K%4|I0kYul#pXGYaNwRKb2C#
+zGP6Pje-Se7yH_3vhI^cE0Xae(IhY~G*o1Q(lUqE+j3vl0(@AS)DON`;^%XlK+~!sR
+z_+WrHt-T{oMtg0|GEP>rtY)K7Q%>6JJW0HuE?SeTP1one4X?qA%K`P9!V|^im(Qh5
+zqlg5w!CO|DMxM+9kSOL`-a*M~-QG@;s9G-jp-cVkP$bodmBslhx$<Cf?mo=Qb@`fm
+z;s5RhIqrtBAk_E6cO;Cxx)+F6dalf9LZz*cFfW$reUI@_$Qy&V(p0r;rBP`UT{s~!
+zOGqPRdp?IaN66bf>MIi=aT<CiO_9X%CLuHk!h|MX7zjv>Kq|IX-ts+gWE39-_>Rs2
+z(Z%D{YHd^SSk!j?or;^(o^r99gi%fRQnhl}$=Vz0?(%@u+%VYk>T^*uRu@cz1%Y@E
+z(Ee-oZq2submqHw7S<`A?d1#Ysm^*A7hs*@Lf=T;HT!4?U7SDM_;T;_Ymf}38|Img
+za%g;Nu+im*y~&yO^kKe>XJDObgdoljt63{q(vF&p28rj!>Q?F^r7bRRN<6MK?Vo_?
+z!d@D5_DMVm6n-NlUIFw?jByW5cdxI0I*W^a^e=RpXG;C`CpCp~6P-sNtDmZETTOlD
+EZ-r*|9RL6T
+
+diff --git a/backend/__pycache__/config.cpython-312.pyc b/backend/__pycache__/config.cpython-312.pyc
+deleted file mode 100644
+index 0f9d0884bcd0748e22772a6e97af628f40fff40c..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 813
+zcmZuvL2DC16n?Y2NjGV#*i>o?w!xm#Lt|{E5Q|bPhzE<%_TUm6#+_+8cC)+AY^$47
+z1%-l_>ZP8&i1ep;5$d4~c=F_}nw~s4vq^=5Gw{9lz4yJD;m!LpGExM+-cNtxI|$&1
+zA!jQ$aC-CFIRFY21<*krLSVstpw?@kHbaMYU*}mCFzawo<k_iH%l$O0hE(A$k?dha
+zS>O-ynHf|<?}?@dz`#QkJZoLw<k`$&IchEH47I&{#vH@iKyx3FH^f}#R5aJBe5M-m
+z3Yp5ySivi1tY}y|Tq`Mel_d!e+p;^pocaN)uJI15E`=mWC70EuM-P-s;uwdd!@5qL
+z#9S3M;8?H?{<7wDFK;GE+^pAw$S1*OB$MXN#=_jcaO1|p>~*~x=fmgJ^Z!@Rt5H7^
+z5|bc^Uf@XZHV<VtKU=3HA<8v~DHkfg!zqiTy3n^KW?s8e8&)pP9*(gpV%&-7cEGe>
+z!ua_%35*D1k=LzIwoHV&h%pJnC?N@tLa9?jIwf3_cLJ^z1;d9me1@Jz_;YKy*;<!O
+z$ktZytl=lEdrWR6QQXRUX<B*K$<|ZiZ?TZJ{3zVu?b$dLW|T5;v?K3mcmv0mW_GXa
+z%^jhc<8ozpVsG^bReoE!YxY-E-e3DL{qAuOa+ZBkg3*b-uyQ;;wL7_A{)VPR`Rv4%
+znxot}r6f$aFU&+`7b#Z`ep`&1Sf(G-o^lua-MKBsHPu58@~Vat8zJ-^CQtK4RNYHY
+RL7QI_P#SyNeC1~4e*ub+)&Bqh
+
+diff --git a/backend/__pycache__/main.cpython-311.pyc b/backend/__pycache__/main.cpython-311.pyc
+deleted file mode 100644
+index 7f0263c568ef32b33adcd5259eb74a43fa663480..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 7648
+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
+L=Na;6?bZJPG;FZO
+
+diff --git a/backend/__pycache__/main.cpython-312.pyc b/backend/__pycache__/main.cpython-312.pyc
+deleted file mode 100644
+index d0e730e7a46515335f7166a76f6f0ace89f1e145..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 7646
+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
+
+diff --git a/backend/__pycache__/run.cpython-311.pyc b/backend/__pycache__/run.cpython-311.pyc
+deleted file mode 100644
+index 3d862f2589495055843f6710206e688fdbc3d207..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 7007
+zcmb6-TWlLgl06S{hA)wNTZ(OsB_}rZpjNTthoacamE_2dUmGbwqIJNfI3t@9#o_e~
+zC5xc~#?ZpX!iUubHZ1JMINt8X(XM@n{?4Db2ylDI?Ey2!03ik-VBjtv{!=aqVEF5*
+zhvH-OSmb(os%yG?s=KSJs;ldBpU;gT{V|i8dCQN`f0K`La+MJ3yS)@b_mGGtkw}Sj
+zf|{czX^P-Xf|+EjlAUC&(lP0<O6R20D!EAxN;bjIxh7rkk7Lp;Iww6el3Wrq<1G)B
+z_m#2QQsjO_A6|4lpb>fqZz*m0g1JA0x0FP8#)Hsgo!BD!mf1<a*ed#=42XecG+8h1
+z5gXyF0a}}&Y?PYB=2?p__QH%C9{`buWl{)M!;D*Ruq}NAh8Rt%c(E@f$CIj%isGn%
+zWig6{s1Qvh;<4zLpMUuWSvV|8^MWL#pe=3H^j}^)n^e?jA|c^m$nAbdkq6xZq|~B%
+zO->4ZbHY?KHY+8?5Kbpa!%nG75G6%Q&dZ7U_?(nfWsAh{Vk{v|Kt(tiO)M&LB_v&!
+zcKV&vbqQ1Hq?nL|nh6Pq6$#JBMHvVG2Eo3*1sTsuSQvt?l6*=SlGExbAUG$Bvas29
+zSV>R8s$-I(2*4o;C*`2~8R2G-GCk2`QdXmCTuv$%;hVi2Rj<W=+JR8UHSp^3&`;nQ
+zFxiRG3zto1;=<(@R4CK3eRT;rHfuVuq^5DwWG~7|DOTAoKv;MggsAWS2atP6t%wCe
+zYDIhydSDZod`(N0m|YZRfNCjKu_dH#DiCSOZlStFWhvECz0Loer4pfe3U}_@lIO~O
+zYD*C)*+m`%6M<mD8>BB{GW{Tr$=Xdm5}A%Cq)5c%u%v*jNTw4c739Ta6cqzlR7^Gn
+zyf>ZkBy7DJq)jjE+Kd!aBUqMIlP53&ofSe@5MG=Z9=!4nbXBg*CT0d=>Xi{mnN{V~
+zm2KN|WmAr?fE<TXi)KeeN-AkAMQR6#$jJ!Ig3JLo!w9YLDjxvIp<<xv?tA}Gcc<>_
+zz$;Gzujqlp2Fd+K;8<>N(d%FF>fU{ZcVBK#f%V=UzB8t=dm$HT$MWHu{Wtno4y?SV
+z)B6p2zgEs0407y)KHtFr$YiHvIbo9+vMZLv{4XG20*U!UOR$@H_}-qfXr>}lfLA2P
+zzCW)avitdp%+%5m8N2jR2zrve+m>o&M6DQ7gr;db1(7P5uox{`k9{r_NJ$qOKnlA+
+zUuWJ&3lxRk2h#>JM1%aW=^+^SZAq1JGAc~qv?M5!0NRaZV#0_r%fif;|0GC?YQb1q
+zjV3|qp?6BgYBXfY-^Ht?=|4Rk<V>dmS}Lg~7d{g?dvSEa^o(B`ek(FQ@%Cu=g6UQy
+zRRxO$W0>xkoCFnCBhq!#5gEHQJ^{t$OK(pEY1{@BO-k96Lfk|?1CeL~OHpw#0uq*t
+zC$HiIP`w{s<qH5g^pvX0?ITaY>Ag93V{YZlos0Q1#=&E{^SI$WzJX}E=kY*+W^VT0
+z=)I-rbfZBxYII}4<^IjyU+=w}zAvpLb=S*=>*cljC$8=d2mE0DRR!M?BHt5Gt=kEE
+z{`~n))zvzs9_IYnV7Qn0b1xhI3HRqC6u_Oua~`_d4O&$YManJ^6jB|~eKS=JmPo67
+zxfY?{!O2!DV!uQ8*{yUe6T_A__xb4;+%;8A4fglHpaz3ZlO_9TI+TPYrA+sNG&P0g
+z1+Ww*E2pF+Ci{ZH!lOST+(K|`4}B5R7}@NKyP@F~c$H%Szywf^<@Q^{A9pNw<T{F!
+zXSqYG@4o*U0LY(hmO9mAP(4~XTf|LQT!~C$IRgU|b&6H=6h4TZwzM3?ehV9G&xNW!
+z@1ncZ|Eo6*x(*iN$2l&<Vu&npUY6)A!acULg%%y6Q{*1;4`68z$?~kU#AIz-7$Mfo
+zN?YnH=Sr67yeo5JSWZsIucpC;QB)B$u^$QvWAIzxY_&{*EX1O7@#HmG0A)|eR|Rse
+zgfI~-OoqXPW~O=D84!ZLCbf`pq}A!Z6VJ#lz!Aes$(SsH!kVtB^z^iZ0WF_dw5*sM
+zcs6k?Cr#$6q~gPbJ~*ogOo=r;tAzOlS=>XaIT$1&#<9s0gv`uz6YLt8ri7#r27$jL
+zlmxCW0v0Eoia>{}#AKX=RzgLY1&~AEc>H(iJMMdRpVY0+e}?}#^Z7@=|7cx$Jgy%K
+z8;8Pr;AckQXS!$D@C@f#3*JVprBC<v<@P*feH)0O+l&6jm9f>>+MAF6PV<L#f7tMc
+zbKM1h+poHoD+M3Oby#9*({7@TmRPO=NA24E0Gb}cTS}nO(65}-iU1(%z<K~}4=e59
+zmQ=PI+@6}gGZoyf=OQy}*^3nlf4_5oktNo+ltf4AxPjiqU3xpKy_cw6`fxRUK;VJe
+zipYy7;aFmJU8_rUZ&@o_doa#a)}61hbLDx1i^hr`(Yu9$Lv5_~5Pew|>>w@HJ@VUC
+z7j~ewU%)nQ#m&oms<f(@SP%2I83GZB4ZotR9QaXVHrmFluC>NBsE(O+*!OtX5o-Rf
+z;a^Sd?lkegsx`N|nF_vj>=E?A@0XleXTGjVtBTnrJx|nrTN0b>tHF!A@M7nEcVwM*
+z{x5MZlx6aPZ396?ma~twW#^l-&fR!<TkS$>XO-qbgbyt7Ho0jbe~YbI9%!&TN!k10
+z)-UlN@wb0lDi^2)RC3#H{{i%4PoiP2aS86(G|IZNRF<}{Ys<+`&RZ*q{I)d_3%HrK
+zUR{7nU%3q~OMq4_5k8^zSKDUxlyR|5eYK2RzD2uwwDx<uZ(;LM{>DsQ$g&GBExD72
+zfWIfIRDr+kOCB44U&?xR+npPPv!0JURgS8!S82@<XT?hDsWJxEweHbgJBRZ^wY7@b
+zc|?J~k#*+}RNJeVxUZH^wLAjnegC752VjXGR=l^;MQ_`xUtRK8Jn3BW+Ey>@zWS^;
+z-&LJO727)V?OX~TxM(^{j@6lG<OIPX02#g<6L>~0LC?tXW8DPc3VLDm?B($IxQR^H
+zoFvAhsd$Q9L#=2>rr{T*aKQ&cx!)TT5D#!nC(_EbOkJh*a(H6w4G0rJ5nll>BGXxE
+zsu1npjG#!@<BBQ`3K=#eCK8#ZO3#?On35FX(p%8hy0!L9`25(VcZ3W*D8K~VaHEKn
+zriKZp@IkW5&NJbO@cBVuI-0l!VIEnC&snz~ETre-F>sXNU)pr4Q4D^I=@g^VoSe)A
+z%JH1JXgoO>O{GjWo}8A0tjS)J6%{VvaC0JIjD#E&O&9T864Jbs$oQ?{YG@y{uE-__
+z)T643OHL7!kRbR0L(ZGd(hBhanK3bECOZS+DbtYx4@<>FCGinb?T9PHU*ZzLDS|i>
+z@&Y*O;FpQYLL9;Y?C{9>^Cov`d=z6Dn_cB4Sm7bK28Q4gFKylk%X}KO1_bV_mQ!V2
+z#_%CBrscs^{C|_%<d*3gy&jWNBno7@;QkL+IpPyKCoI&u3&3>(xC!A3*bnG~qcMq0
+z#dKLKf{S7-=qovaZYvfQv4R;q_^=j+FOxaBBBcOSG-0|UbE!y4PM{jZBa)25rKN;U
+zrxOX2k}z2a{ssAyfdOz7Fohgv#EGn=k~hhcJ;k%oc%1aQ3xZE>ErL#U8dRr7b$;V(
+zx;wslI6tcUx(#1<uI&dma`1o8+~z;NuzX?V=TF!coo%^)<kJ)R@Tae@bw7FOsQ%K?
+zqQBwx^;PQjhq>-5dU(T&oc?c-pBbeJOd$6Ld5Zp)yUOahHCp%g82+Bz$zq`44tLM{
+ziFft=HP8Bcdf=21IF%bLGQ8#ruEqgCUT@NvV>)xpV2%M|wY`47^V9Bs4E;8=*0N6P
+z?MICEBkLpU<Le_v`$^69I^=&lsxf0aGiESjfLK4B{g<gnSHGD1)7;~8dgx6f^rq%I
+zOY+a((U^C2=3Rq%7m%WpU%qPHzt8E;4#U~8fp~V5DmJ&?nasQO<{qONF3+4}lq$hn
+zt^!~G8~?BUI^SmSZC~@9Px#LKF`e%=`0fqlbi%(4O?M96>;0s6HM4e7Z+OjUcr6#-
+zpji%B!})H0c;myBlRCH0;Pz?Uz9Q$<eEs>e03ffc8aJeKLk2el2;}EQU(*Jn;MZDc
+z{d7FPsQHdVUJsYb$MExr&W#w{2q0TBT=Ac8FoY06JY=350mQta(L=SlKznoDw<cHj
+z=yaz+cWQK}6|%ZD@Nv&_Pp;=1%D>{$sdj^E*QoX%oXF7(5@N6|BvepWq`k}iT0_tM
+zQ2>xX+bngu*Pwefy4OZ)gJo&HKnHT6((}B?*Ap^)6%=Vs<6m7H2LSo;L5)7G)29vk
+zG#~|<v(^M*4;~N@UD{(%_4oI!sTy@ur;Zxb(XXk&C)A)$4H?vsMh$JSUNWNVX3veD
+z0@GaNeUJ-of5F$d;XzE@x5&w`-xB~ESqq;3P={O%8we&`1qHf6D`#t>9jjd$-vK$V
+z!dfefF3_H@>E<VNvre}fbgM?UmZ$CldN6fm4Ak@APXyoWr2o?C9`iZ=(%U-5JN|=r
+z0REMaJ=cJ~YH*)B#(cH6`P=~W)qn%=|2%Z?ybt}==f2=#{@U7ifo1-SbpTG{szmQ2
+z5eQ5X9}|;^LK!C!%*~rACU~g_IVywACKri_ats2pZV1h$A#M%9S!|t_mdz&aE+)}W
+z{4xQ=c$yqBX^Hrh700jwD5X$J)tb8_=Sf8E%-Qp!)&Wtnyd;!TGQ`9@kvS7n2g3zP
+zLnQ+9f**pgeL5kX!WbIhY(+{xKoDe#+Mt~j*(d-3M0IJXvo=3PuAKE0kUM8R1r*TA
+zxqv)5>nWgmt(*&Jk7mzLd2h~9;2Qz>>TgY~bl&N{7y2ZWZ&_=2)c(c(Kka|)c&zBb
+zVIw%KH;fn!Bf4+Y@QrF?ztnxd%(*w5ECu$&4(c2f7!*4Q&{Qu-eHpl26lj7S><Lp8
+n2;Vk1MkCgHEAxbD)0nmb<;XRC+_Kz~vmS^jv+YoAG4%fca7P;P
+
+diff --git a/backend/__pycache__/run.cpython-314.pyc b/backend/__pycache__/run.cpython-314.pyc
+deleted file mode 100644
+index 3777c227da7b0aaf8faf8b89852c893544c21278..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 6856
+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
+E3rY`18vp<R
+
+diff --git a/backend/api/__pycache__/__init__.cpython-311.pyc b/backend/api/__pycache__/__init__.cpython-311.pyc
+deleted file mode 100644
+index 7a1aef3e0a3dd390cbee66b07dae777dd57d1d93..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 174
+zcmZ3^%ge<81Qk^USs?l`h=2h`DC095kTIPhg&~+hlhJP_LlF~@{~09t%hA~?CbT%U
+zs5mA&C(AIoB*rDRIJ+djAjY{eIVUwFGdI;SFEOXGII}n=DKR-aH7_M5u^=-hK0Y%q
+svm`!Vub}c5hfQvNN@-52T@fqLM39}u{6OLZGb1D82L>2X#0(Sz0H2jB6#xJL
+
+diff --git a/backend/api/__pycache__/__init__.cpython-312.pyc b/backend/api/__pycache__/__init__.cpython-312.pyc
+deleted file mode 100644
+index b7d2d88bb51dbd5d20f0d3efa4eda56881412ef7..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 162
+zcmX@j%ge<81Qk^USs?l`h(HIQS%4zb87dhx8U0o=6fpsLpFwJVIXYX#gche36~|=f
+zWEm!x#JHpuXP4v`#5h+b=cI;Y=B7I4CFWEXXBNjKB_?O5=B30W7G%c6$7kkcmc+;F
+j6;%G>u*uC&Da}c>D`Ewj$Oy#6AjU^#Mn=XWW*`dy-QOt*
+
+diff --git a/backend/api/routers/__pycache__/__init__.cpython-311.pyc b/backend/api/routers/__pycache__/__init__.cpython-311.pyc
+deleted file mode 100644
+index e5378200de69879c9c62d1f50914abdeb1e02ca5..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 182
+zcmZ3^%ge<81Qk^USs?l`h=2h`DC095kTIPhg&~+hlhJP_LlF~@{~09t%hTB^CbT%U
+zs5mA&C(AIoB*rDRIJ+djAjY{eIVUwFGdI;SFEOXGII}n=DKR-aH7_M5u^=<1D8IA>
+yq$xf=GcU6wK3=b&@)w6qZhlH>PO4oIE6`++-NpPs;sY}yBjX1K7*WIw6axTcLN1K}
+
+diff --git a/backend/api/routers/__pycache__/__init__.cpython-312.pyc b/backend/api/routers/__pycache__/__init__.cpython-312.pyc
+deleted file mode 100644
+index 49baa866eb9d2c59642600c7ab4b28b642888d32..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 170
+zcmX@j%ge<81Qk^USs?l`h(HIQS%4zb87dhx8U0o=6fpsLpFwJVc{*Fggche36~|=f
+zWEm!x#JHpuXP4v`#5h+b=cI;Y=B7I4CFWEXXBNjKB_?O5=B30W7G%a0<(HO#G{whf
+p=4F<|$LkeT{^GF7%}*)KNwq6t1)9tV#Kj=SM`lJw#v*1Q3jlufEP((3
+
+diff --git a/backend/api/routers/__pycache__/analytics.cpython-311.pyc b/backend/api/routers/__pycache__/analytics.cpython-311.pyc
+deleted file mode 100644
+index f9ff3d586df3eb8fe427e4dcaf2f736178923daf..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 1123
+zcmZWn-D}fO6u&oV)1>V>HyvpGWG_<aHUuBGRfI7?+{2Km2q79`a$D2pi+gX!HWZ2o
+z?myTb6nvVK?Z5CJNTClUAPmHZy;b(MC+|($%;4eV<b3>c&pE%FZxa)Fz+`JDXwC=#
+z{Nlk_GD8QR9W!SSSiph~aG?qz_XS6AMO9?JXl0y?n^m*1pLHZRr{-c`a%5LgmDtZY
+zdAFbzAP@i&E!k2U@Hl_KdLFT7C~6TEzfO#!f8SOC<&KMKv^8Z-e#{&&*iiyiOV*`l
+zpfY{RGZh#W4A1kaL2ch7EL2vWKH2cw6yZ~G2#^V))b<*@I<?{%&Nj78vVlmzzCb)_
+z`fk9!(2a4CC5w)4SbBi{CNk+xej%wvO5#?8ND45j+gnkF8V#}|FPLqNkw@79B|Pe&
+zyS{~-NWzG=v4?YPDwEGX7Ct6>;F-ppJwV~O002#R1E87s2MlqPpxy(@j~vN6&>Y<<
+z0BIcK46awQSYb#kF%!v_K@HuqF_w8Kp-nb9XDK&YoA4%g&ev9#wHE|oqP3jnJ(FsW
+z5NT0A&{nri2R*l46thZfqP;Q97V<332y6|<w?MRnuK8d)no1&lL>0cmn(#k@%resf
+zzf0vWi@odBZfUMpn(I9NS-7$P^7HF%q1r1{!%X#zp}=}Yz$NyM*{n=Pd0nr!8NEo?
+zG3PVN)eS<~6qvISNv7}B?Z$BJQhXm|o|tcuYmoSesLb};v`s|jF9sZ?hU{ET0EGJ3
+zXdr!D=7h4_jkk@&2BPss-vOTC172q4Tz<fMwjJ~k-)13amHc34AVLWHU^Yza3Ah=i
+z^#t4s)7l3MVOsm37N)fi?uThTQKomV?N<+5hp$4V)>UdfrPh%K5)kB1<qzfEweap@
+ar`&~0J-9Rw1UNSUWAjG@!t(#=c*(!<R3}XU
+
+diff --git a/backend/api/routers/__pycache__/analytics.cpython-312.pyc b/backend/api/routers/__pycache__/analytics.cpython-312.pyc
+deleted file mode 100644
+index e25e2deb44a354bb4639a337c4cdd36e41bead16..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 968
+zcmYjO&1(}u6rb5m_9I`lRY6j%9~TLvErN&Iicl&Pdni&BVOhJZJCnG{elasCrYJ-Z
+z^e?a#1o2jB{}V5j3c_j*qCNCh&CQcDo88obdGmYk_h#OEzxh-y7XV*V-#)l!B>;X3
+zCtJB8fP*(2Yykui^necy2nCir$(Ie8V;SYVoS!%H3C??puNrEC6;JbZLr<{k75t)6
+zgg^pVMjFzaaIdh-Yl>x*aH%yp#Q$4V#Ohut%R*zQ{4%$jCK#1&rFQB_cr_Ro?H~x5
+z&D=1c+|?KF-dPJf43i^yn4nS2m>V<&JH8m$UYEHJUBfiuH?Rmgp&#)ZmYtD2Sn@&}
+zSrG|a*kPN6*%24(BUqDSB_g=tK8<tCZqiL{*69#}1I8bykhFs3hX{L4+I(_|&iICd
+zbq=-wgBi(ESpaCIpO7))+)eYI1Eyy2XP~8J_~gto?{S4zYk8t`iYVN~8nT&fA(s$w
+zEmrUbZ&yg8rn6E}<kH`jrFruK#e|w|uXW8~=50*dER4*huH)hRu8$KbsY}hrw$sJ|
+zGVRDUNg_QpM;gsU-FSTDS*bqcG%r%-n_lLo2Yywm@8-Tv);~|y4=U5W<?qGw+YjHb
+zzg<5l*7tMu0Z#&}LT-XthXh27UmJ@HmeuI+0Jbb5G>z4UO&RZl2=!vc34?~)91dPd
+zzJbnA=Lz<0nmiF#`Ggy;gXzpki)m=6&$&?oWg)Sf*ve=jDeotlH<p{2B{O{l<P0as
+zgkZIsyk^J4x5!2A3SH?kH^(xBun(>rf(wUWst;!SV4)AL|IjD4>pSh8M_=@Xo^q@J
+gNqbd&QGLC#e|4@`J%Bg<ND`bL$UvI^El^VEAFK8IvH$=8
+
+diff --git a/backend/api/routers/__pycache__/preprocess.cpython-311.pyc b/backend/api/routers/__pycache__/preprocess.cpython-311.pyc
+deleted file mode 100644
+index 0a86e35db1132a02c4357ad89d8d15258a0f4ba2..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 2978
+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
+HAnm^a8C(D6
+
+diff --git a/backend/api/routers/__pycache__/preprocess.cpython-312.pyc b/backend/api/routers/__pycache__/preprocess.cpython-312.pyc
+deleted file mode 100644
+index df06db88461dd10294eeac4ec35701b74e6eea53..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 2647
+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
+
+diff --git a/backend/api/routers/__pycache__/projects.cpython-311.pyc b/backend/api/routers/__pycache__/projects.cpython-311.pyc
+deleted file mode 100644
+index aa752e9a0e4ba400d073065278c911e703e9bb14..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 7198
+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
+
+diff --git a/backend/api/routers/__pycache__/projects.cpython-312.pyc b/backend/api/routers/__pycache__/projects.cpython-312.pyc
+deleted file mode 100644
+index 48a1b820c835b6dc6472db8ac07dd127dd94c56c..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 6283
+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
+
+diff --git a/backend/api/routers/analytics.py b/backend/api/routers/analytics.py
+index 5618f57..281b204 100644
+--- a/backend/api/routers/analytics.py
++++ b/backend/api/routers/analytics.py
+@@ -2,15 +2,14 @@ from __future__ import annotations
+ 
+ from fastapi import APIRouter
+ 
+-from ...config import settings
+ from ...models.schemas import AnalyticsResponse
+ from ...services.analytics_service import compute_analytics
+ from ...services.storage_service import load_project
+ 
+-router = APIRouter(prefix="/analytics", tags=["analytics"])
++router = APIRouter(prefix="/users/{user_id}/analytics", tags=["analytics"])
+ 
+ 
+ @router.get("/current", response_model=AnalyticsResponse)
+-def analytics_current() -> AnalyticsResponse:
+-    project = load_project(settings.data_dir)
++def analytics_current(user_id: str) -> AnalyticsResponse:
++    project = load_project(user_id)
+     return compute_analytics(project.events)
+diff --git a/backend/api/routers/preprocess.py b/backend/api/routers/preprocess.py
+index 28efe55..a7de350 100644
+--- a/backend/api/routers/preprocess.py
++++ b/backend/api/routers/preprocess.py
+@@ -1,46 +1,65 @@
+ from __future__ import annotations
+ 
+ import asyncio
+-import tempfile
+ import traceback
+ from pathlib import Path
+ 
+ from fastapi import APIRouter, File, HTTPException, UploadFile
+ from fastapi.responses import JSONResponse
+ 
+-from ...services.preprocess_service import preprocess_video
++from ...config import settings
++from ...services.preprocess_service import (
++    VideoTooLongError,
++    VideoUnreadableError,
++    preprocess_video,
++    probe_video,
++)
++from ...services.upload_service import save_upload_to_temp
++from ...services.user_service import normalize_user_id
+ 
+-router = APIRouter(prefix="/preprocess", tags=["preprocess"])
++router = APIRouter(prefix="/users/{user_id}/preprocess", tags=["preprocess"])
++
++# Limita quantos vídeos são processados ao mesmo tempo (MediaPipe é pesado em
++# CPU). Os demais usuários esperam na fila, em vez de derrubar o servidor.
++_slots: asyncio.Semaphore | None = None
++
++
++def _get_slots() -> asyncio.Semaphore:
++    global _slots
++    if _slots is None:
++        _slots = asyncio.Semaphore(max(1, settings.max_concurrent_preprocess))
++    return _slots
+ 
+ 
+ @router.post("")
+-async def preprocess(file: UploadFile = File(...)) -> JSONResponse:
++async def preprocess(user_id: str, file: UploadFile = File(...)) -> JSONResponse:
+     """
+-    Recebe um vídeo, processa todos os frames com MediaPipe (mp.solutions.hands)
+-    e devolve o JSON com os landmarks indexados por número de frame.
+-
+-    Roda em thread separada (asyncio.to_thread) para não bloquear o event loop
+-    do uvicorn durante o processamento — permite que heartbeat e outras
+-    requisições continuem sendo atendidas enquanto o vídeo é processado.
++    Recebe um vídeo, processa todos os frames com MediaPipe e devolve o JSON
++    de landmarks por frame. Respeita o limite de tamanho e de duração e a
++    fila de processamento simultâneo.
+     """
++    normalize_user_id(user_id)  # valida o ID (400 se inválido)
+     if not file.filename:
+         raise HTTPException(status_code=400, detail="Arquivo sem nome")
+ 
+-    suffix = Path(file.filename).suffix or ".mp4"
+-
+-    # Salva em arquivo temporário (cv2 não lê de memória)
+-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+-        tmp.write(await file.read())
+-        tmp_path = tmp.name
+-
++    tmp = await save_upload_to_temp(file)   # 413 se passar do limite de MB
+     try:
+-        # asyncio.to_thread → roda o subprocess em thread separada,
+-        # liberando o event loop para responder heartbeat durante o processamento
+-        result = await asyncio.to_thread(preprocess_video, tmp_path)
+-    except Exception as e:
+-        tb = traceback.format_exc()
+-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}\n\n{tb}")
++        try:
++            await asyncio.to_thread(probe_video, str(tmp))
++        except VideoTooLongError as e:
++            raise HTTPException(status_code=413, detail=str(e))
++        except VideoUnreadableError as e:
++            raise HTTPException(status_code=422, detail=str(e))
++
++        async with _get_slots():
++            try:
++                result = await asyncio.to_thread(preprocess_video, str(tmp))
++            except VideoTooLongError as e:
++                raise HTTPException(status_code=413, detail=str(e))
++            except Exception as e:
++                tb = traceback.format_exc()
++                raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}\n\n{tb}")
+     finally:
+-        Path(tmp_path).unlink(missing_ok=True)
++        Path(tmp).unlink(missing_ok=True)
+ 
+     return JSONResponse(content=result)
+diff --git a/backend/api/routers/projects.py b/backend/api/routers/projects.py
+index cdc1320..e9e1c35 100644
+--- a/backend/api/routers/projects.py
++++ b/backend/api/routers/projects.py
+@@ -1,117 +1,100 @@
+ from __future__ import annotations
+ 
+-import mimetypes
++import asyncio
++import os
+ from pathlib import Path
+ 
+-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
++from fastapi import APIRouter, File, HTTPException, UploadFile
+ from fastapi.responses import FileResponse
+ 
+ from ...config import settings
+ from ...models.schemas import Project
++from ...services.preprocess_service import (
++    VideoTooLongError,
++    VideoUnreadableError,
++    probe_video,
++)
+ from ...services.storage_service import load_project, save_project
++from ...services.upload_service import save_upload_to_temp
++from ...services.user_service import normalize_user_id, user_videos_dir
+ 
+-router = APIRouter(prefix="/projects", tags=["projects"])
++# Todas as rotas são escopadas por usuário: /api/users/{user_id}/projects/...
++router = APIRouter(prefix="/users/{user_id}/projects", tags=["projects"])
+ 
+-# Video extensions considered safe to serve from arbitrary local paths
+-_VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".ts", ".mts"}
+ 
+-
+-def _videos_dir() -> Path:
+-    d = Path(settings.data_dir) / settings.videos_dirname
+-    d.mkdir(parents=True, exist_ok=True)
+-    return d
++def _video_url(user_id: str, name: str) -> str:
++    return f"{settings.api_prefix}/users/{normalize_user_id(user_id)}/projects/videos/{name}"
+ 
+ 
+ @router.get("/current", response_model=Project)
+-def get_current_project() -> Project:
+-    return load_project(settings.data_dir)
++def get_current_project(user_id: str) -> Project:
++    return load_project(user_id)
+ 
+ 
+ @router.post("/reset", response_model=Project)
+-def reset_project() -> Project:
+-    """Reset the persisted project back to an empty/default state."""
++def reset_project(user_id: str) -> Project:
++    """Volta o projeto do usuário ao estado vazio."""
+     project = Project()
+-    save_project(settings.data_dir, project)
++    save_project(user_id, project)
+     return project
+ 
+ 
+ @router.post("/import", response_model=Project)
+-def import_project(project: Project) -> Project:
+-    save_project(settings.data_dir, project)
++def import_project(user_id: str, project: Project) -> Project:
++    save_project(user_id, project)
+     return project
+ 
+ 
+ @router.get("/export", response_model=Project)
+-def export_project() -> Project:
+-    return load_project(settings.data_dir)
++def export_project(user_id: str) -> Project:
++    return load_project(user_id)
+ 
+ 
+ @router.get("/videos")
+-def list_videos() -> list[dict[str, str]]:
+-    out: list[dict[str, str]] = []
+-    for p in sorted(_videos_dir().glob("*")):
+-        if p.is_file():
+-            out.append({"name": p.name, "url": f"{settings.api_prefix}/projects/videos/{p.name}"})
+-    return out
++def list_videos(user_id: str) -> list[dict[str, str]]:
++    return [
++        {"name": p.name, "url": _video_url(user_id, p.name)}
++        for p in sorted(user_videos_dir(user_id).glob("*"))
++        if p.is_file() and not p.name.endswith(".tmp")
++    ]
+ 
+ 
+ @router.get("/videos/{filename}")
+-def get_video(filename: str) -> FileResponse:
+-    path = (_videos_dir() / filename).resolve()
+-    if not path.exists() or not path.is_file():
+-        raise HTTPException(status_code=404, detail="Video not found")
++def get_video(user_id: str, filename: str) -> FileResponse:
++    videos_dir = user_videos_dir(user_id).resolve()
++    path = (videos_dir / filename).resolve()
+ 
+-    # Basic path traversal guard: ensure it's inside the videos dir.
+-    if _videos_dir().resolve() not in path.parents:
++    # Guarda contra path traversal: o arquivo precisa estar dentro da pasta do usuário.
++    if videos_dir not in path.parents:
+         raise HTTPException(status_code=400, detail="Invalid filename")
++    if not path.is_file():
++        raise HTTPException(status_code=404, detail="Video not found")
+ 
+     return FileResponse(path)
+ 
+ 
+-@router.get("/video-by-path")
+-def get_video_by_path(path: str = Query(..., description="Absolute path to the video file")) -> FileResponse:
+-    """Serve a video file from an arbitrary absolute path on the local machine.
+-
+-    Security constraints:
+-    - Path must be absolute.
+-    - File must exist and be a regular file.
+-    - Extension must be in the allowed video suffixes set.
+-    - This endpoint is intentionally local-only (no auth needed because the
+-      backend only binds to 127.0.0.1).
+-    """
+-    p = Path(path)
+-
+-    if not p.is_absolute():
+-        raise HTTPException(status_code=400, detail="Path must be absolute")
+-    if not p.exists() or not p.is_file():
+-        raise HTTPException(status_code=404, detail="File not found")
+-    if p.suffix.lower() not in _VIDEO_SUFFIXES:
+-        raise HTTPException(status_code=400, detail="Not a supported video file type")
+-
+-    media_type = mimetypes.guess_type(str(p))[0] or "video/mp4"
+-    return FileResponse(str(p), media_type=media_type)
+-
+-
+-@router.head("/video-by-path")
+-def head_video_by_path(path: str = Query(..., description="Absolute path to the video file")) -> FileResponse:
+-    return get_video_by_path(path)
+-
+-
+ @router.post("/videos/upload")
+-async def upload_video(file: UploadFile = File(...)) -> dict[str, str]:
++async def upload_video(user_id: str, file: UploadFile = File(...)) -> dict[str, str]:
+     if not file.filename:
+         raise HTTPException(status_code=400, detail="Missing filename")
+ 
++    videos_dir = user_videos_dir(user_id)
+     safe_name = Path(file.filename).name
+-    dest = (_videos_dir() / safe_name).resolve()
+-
+-    data = await file.read()
+-    if not data:
+-        raise HTTPException(status_code=400, detail="Empty file")
+-
+-    dest.write_bytes(data)
+-    return {
+-        "name": safe_name,
+-        "url": f"{settings.api_prefix}/projects/videos/{safe_name}",
+-        "absolute_path": str(dest),
+-    }
++
++    # 1) grava em streaming respeitando o limite de MB (413 se passar)
++    tmp = await save_upload_to_temp(file, dest_dir=videos_dir)
++    try:
++        # 2) valida a duração (limite de 10 min por padrão)
++        try:
++            await asyncio.to_thread(probe_video, str(tmp))
++        except VideoTooLongError as e:
++            raise HTTPException(status_code=413, detail=str(e))
++        except VideoUnreadableError as e:
++            raise HTTPException(status_code=422, detail=str(e))
++
++        # 3) aceita: troca atômica para o nome final
++        os.replace(tmp, videos_dir / safe_name)
++    finally:
++        Path(tmp).unlink(missing_ok=True)
++
++    return {"name": safe_name, "url": _video_url(user_id, safe_name)}
+diff --git a/backend/config.py b/backend/config.py
+index 8194074..b173a54 100644
+--- a/backend/config.py
++++ b/backend/config.py
+@@ -37,12 +37,28 @@ def _default_cors_origins() -> list[str]:
+ 	return list(_DEV_ORIGINS)
+ 
+ 
++def _env_int(name: str, default: int) -> int:
++	try:
++		return int(os.environ.get(name, default))
++	except (TypeError, ValueError):
++		return default
++
++
+ class Settings(BaseModel):
+ 	app_name: str = "Cycle Time Analysis API"
+ 	api_prefix: str = "/api"
+ 	cors_allow_origins: list[str] = _default_cors_origins()
+ 	data_dir: str = _default_data_dir()
+ 	videos_dirname: str = "videos"
++	users_dirname: str = "users"
++
++	# ── Limites de vídeo ────────────────────────────────────────────────────
++	# Duração máxima (segundos). Padrão: 10 minutos.
++	max_video_seconds: int = _env_int("CTA_MAX_VIDEO_SECONDS", 600)
++	# Tamanho máximo do arquivo (MB) — proteção extra de disco/memória.
++	max_video_mb: int = _env_int("CTA_MAX_VIDEO_MB", 2048)
++	# Quantos pré-processamentos (MediaPipe) rodam ao mesmo tempo; os demais esperam na fila.
++	max_concurrent_preprocess: int = _env_int("CTA_MAX_CONCURRENT_PREPROCESS", 2)
+ 
+ 
+ settings = Settings()
+\ No newline at end of file
+diff --git a/backend/main.py b/backend/main.py
+index 73aa908..290ac55 100644
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -1,7 +1,6 @@
+-from fastapi import FastAPI
++from fastapi import FastAPI, Request
++from fastapi.responses import JSONResponse
+ from fastapi.middleware.cors import CORSMiddleware
+-from fastapi.staticfiles import StaticFiles
+-from pathlib import Path
+ import mimetypes
+ 
+ from .api.routers import analytics, projects, preprocess
+@@ -15,6 +14,22 @@ mimetypes.add_type("video/webm", ".webm")
+ def create_app() -> FastAPI:
+ 	app = FastAPI(title=settings.app_name)
+ 
++	# Rejeita uploads grandes ANTES de receber o corpo (o parse do multipart
++	# gravaria o arquivo inteiro em disco antes de qualquer validação).
++	@app.middleware("http")
++	async def limit_upload_size(request: Request, call_next):
++		if request.method == "POST" and request.url.path.endswith(("/videos/upload", "/preprocess")):
++			length = request.headers.get("content-length")
++			max_bytes = settings.max_video_mb * 1024 * 1024
++			# pequena folga para o overhead do multipart
++			if length and length.isdigit() and int(length) > max_bytes + 1024 * 1024:
++				return JSONResponse(
++					status_code=413,
++					content={"detail": f"Arquivo maior que o limite de {settings.max_video_mb} MB."},
++				)
++		return await call_next(request)
++
++	# CORS por último = camada mais externa (assim até as respostas 413 levam os headers CORS)
+ 	app.add_middleware(
+ 		CORSMiddleware,
+ 		allow_origins=settings.cors_allow_origins,
+@@ -27,32 +42,11 @@ def create_app() -> FastAPI:
+ 	app.include_router(analytics.router,   prefix=settings.api_prefix)
+ 	app.include_router(preprocess.router,  prefix=settings.api_prefix)
+ 
+-	# Static mount for uploaded videos
+-	videos_dir = Path(settings.data_dir, settings.videos_dirname)
+-	videos_dir.mkdir(parents=True, exist_ok=True)
+-	app.mount(
+-		f"{settings.api_prefix}/projects/videos-static",
+-		StaticFiles(directory=str(videos_dir)),
+-		name="videos",
+-	)
+-
+ 	@app.get("/health")
+ 	@app.get(f"{settings.api_prefix}/health")
+ 	def health() -> dict[str, str]:
+ 		return {"status": "ok"}
+ 
+-	# ── Compatibilidade com o frontend antigo (modo desktop) ─────────────────
+-	# Em servidor NÃO pode encerrar o processo: um usuário fechando a aba
+-	# derrubaria a API para todos. Mantidos como no-op para o frontend não
+-	# receber erro enquanto as chamadas não forem removidas de lá.
+-	@app.post("/api/heartbeat", include_in_schema=False)
+-	def heartbeat() -> dict[str, str]:
+-		return {"status": "ok"}
+-
+-	@app.post("/api/shutdown", include_in_schema=False)
+-	def shutdown() -> dict[str, str]:
+-		return {"status": "ignored"}
+-
+ 	# O frontend (React) é servido pelo IIS, não por esta API.
+ 	return app
+ 
+diff --git a/backend/models/__pycache__/__init__.cpython-312.pyc b/backend/models/__pycache__/__init__.cpython-312.pyc
+deleted file mode 100644
+index 67c919339551403ebf47f187f08757dadfbe2e6c..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 165
+zcmX@j%ge<81S-A9vq1D?5P=Rpvj9b=GgLBYGWxA#C}INgK7-W!a&fkb2`x@7Dvrs{
+z$udkXiE&9S&MwI>h;gn=&Pff)%uRL7OU$V(&Mb~eN=(j9%}a^N%}+_qDUOMc&&<m#
+liI3MSsQkrY0~9RHNwq6t1sci-#Kj=SM`lJw#v*1Q3jl-dDr^7%
+
+diff --git a/backend/models/__pycache__/schemas.cpython-311.pyc b/backend/models/__pycache__/schemas.cpython-311.pyc
+deleted file mode 100644
+index f4cb871643feef89b6aba04bbc8d87f338aa3e70..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 6697
+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
+
+diff --git a/backend/models/__pycache__/schemas.cpython-312.pyc b/backend/models/__pycache__/schemas.cpython-312.pyc
+deleted file mode 100644
+index 5c3da3291b78a959d21f714d899a22afbfc3d192..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 5354
+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
+JBsg*7{|5w~x+eet
+
+diff --git a/backend/run.py b/backend/run.py
+index 03832c1..036110e 100644
+--- a/backend/run.py
++++ b/backend/run.py
+@@ -48,6 +48,12 @@ def _parse_args() -> argparse.Namespace:
+ 	                help="Pasta persistente (padrão: <pasta do exe>/data)")
+ 	ap.add_argument("--cors-origins", default=None,
+ 	                help="Origens permitidas separadas por vírgula, ex.: https://ct0devtefsrv01.br.bosch.com")
++	ap.add_argument("--max-video-seconds", type=int, default=None,
++	                help="Duração máxima do vídeo em segundos (padrão: 600 = 10 min)")
++	ap.add_argument("--max-video-mb", type=int, default=None,
++	                help="Tamanho máximo do vídeo em MB (padrão: 2048)")
++	ap.add_argument("--max-concurrent-preprocess", type=int, default=None,
++	                help="Pré-processamentos simultâneos (padrão: 2)")
+ 	ap.add_argument("--log-file", default=None,
+ 	                help="Se informado, redireciona stdout/stderr para este arquivo")
+ 	return ap.parse_args()
+@@ -69,6 +75,12 @@ def main() -> None:
+ 		os.environ["CTA_DATA_DIR"] = _abs(args.data_dir)
+ 	if args.cors_origins:
+ 		os.environ["CTA_CORS_ORIGINS"] = args.cors_origins
++	if args.max_video_seconds is not None:
++		os.environ["CTA_MAX_VIDEO_SECONDS"] = str(args.max_video_seconds)
++	if args.max_video_mb is not None:
++		os.environ["CTA_MAX_VIDEO_MB"] = str(args.max_video_mb)
++	if args.max_concurrent_preprocess is not None:
++		os.environ["CTA_MAX_CONCURRENT_PREPROCESS"] = str(args.max_concurrent_preprocess)
+ 
+ 	try:
+ 		import uvicorn
+diff --git a/backend/services/__pycache__/__init__.cpython-311.pyc b/backend/services/__pycache__/__init__.cpython-311.pyc
+deleted file mode 100644
+index 34ee0ce466f93791278ff54f58230b584eee1da1..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 179
+zcmZ3^%ge<81Qk^USs?l`h=2h`DC095kTIPhg&~+hlhJP_LlF~@{~09t%gxy;CbT%U
+zs5mA&C(AIoB*rDRIJ+djAjY{eIVUwFGdI;SFEOXGII}n=DKR-aH7_LwsJbjOIkh+@
+wK0Y%qvm`!Vub}c5hfQvNN@-52T@fqLSdhiV{6OLZGb1D82L>2X#0(Sz0JxnkL;wH)
+
+diff --git a/backend/services/__pycache__/__init__.cpython-312.pyc b/backend/services/__pycache__/__init__.cpython-312.pyc
+deleted file mode 100644
+index 0ff327b1ade79d590d918595e483d614fd2c2403..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 167
+zcmX@j%ge<81Qk^USs?l`h(HIQS%4zb87dhx8U0o=6fpsLpFwJVxj9?Kgche36~|=f
+zWEm!x#JHpuXP4v`#5h+b=cI;Y=B7I4CFWEXXBNjKB_?O5=B2~{RhMNZrxwS=$7kkc
+nmc+;F6;%G>u*uC&Da}c>D`Ev2%Lv59AjU^#Mn=XWW*`dy;D9SQ
+
+diff --git a/backend/services/__pycache__/analytics_service.cpython-311.pyc b/backend/services/__pycache__/analytics_service.cpython-311.pyc
+deleted file mode 100644
+index eb3bf5bd2d654424a4245417b8f83757229d6fc4..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 9133
+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
+J`bGjP{|jO-$dLd5
+
+diff --git a/backend/services/__pycache__/analytics_service.cpython-312.pyc b/backend/services/__pycache__/analytics_service.cpython-312.pyc
+deleted file mode 100644
+index 8a01dab024dda3912ee9d3fd4c8ef9904d20fc49..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 7091
+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
+PQeqWT_Vfrmp<4Za`(Fqt
+
+diff --git a/backend/services/__pycache__/glove_detector.cpython-311.pyc b/backend/services/__pycache__/glove_detector.cpython-311.pyc
+deleted file mode 100644
+index cb622786fa04de5b27dc69711b9a53a94c188643..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 8414
+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
+W3cG+;+Nq-v^n^qdo4*TiHvcc&bTIS)
+
+diff --git a/backend/services/__pycache__/glove_detector.cpython-314.pyc b/backend/services/__pycache__/glove_detector.cpython-314.pyc
+deleted file mode 100644
+index 51068d05874a1769697132d65ac757c4e390ea86..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 9060
+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
+L2hoyT=D7Yp?a=a)
+
+diff --git a/backend/services/__pycache__/preprocess_service.cpython-311.pyc b/backend/services/__pycache__/preprocess_service.cpython-311.pyc
+deleted file mode 100644
+index 01a104c703a73e7e5579b030f5f814d6bda6786b..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 7626
+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
+
+diff --git a/backend/services/__pycache__/preprocess_service.cpython-312.pyc b/backend/services/__pycache__/preprocess_service.cpython-312.pyc
+deleted file mode 100644
+index aec3ed26a7ded225dd9ee85c07b2971674ff1084..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 4095
+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
+D2#2UZ
+
+diff --git a/backend/services/__pycache__/storage_service.cpython-311.pyc b/backend/services/__pycache__/storage_service.cpython-311.pyc
+deleted file mode 100644
+index 1867653643fb4333b15d4df380e8af4b3306b7ab..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 1975
+zcmah}&1)M+6rb4-X|44~Y{jWlS}M1;YZYopsNB#rg<w<nQYUU)QjGAj(M;l%SG!_n
+z<=Dn4A{0^=LrpKvsrXRb1m_RvpU|UJ1QkmSfzm^6D(T6mzL}MT*J;wH)th;5X5P&F
+zesA8-eSIkevc6d^=2V3K6h=pssDqz>0i8WW5Wy}g;U$bkUvZTs1zOcrOWKkKK8@(E
+zUP>$_pg%}b-)KuoXiaDhGDP~I?ICG$2HF%+ZlLVhXJUga4o%zh{J;(z-{bROYuD{y
+z<(b$XjO2CZ7il2~4PpnjMI08YJYZph(V)USroprV7LnQ_9B`G+v4az1Tj&6+!>;EZ
+z-opD`s}n%91QYy3Ie;@9wqbyXXbZ!!)%nG&5+=(wqh7#6gRVO~u>94mBF_@)rByg2
+zSV@Qz;xZQjGMVGgXFke*$tmOcRkwJd5aeemUk&_nerBWK(nY64uX?t-!5yBzWfxYd
+zNAfUx%_&fx=Yh}cJJf1Brpg=P0QGo<QLBRrI|JMFz@JZos-h#K_uH?w`*-@QSDTvt
+zVDA3h?(F^t)w#Mh+0Z6y+GNx0t$y|#=EmUz=py(gptFZw1s}niCPDy-GQZhdj%b=H
+za^K5hc^YU023#PVVFRGU&NQnG6tgtAgqsh8f+L%+KfF{o#~S9?{?~OgSJQHA5Jp%6
+zRE%RC9FpTdp!4cOzMSI&SbGTnNO*rBqP8VIb^`_CB5f&(43h%cb7D=$E3yZ2Czfe(
+z>z;CQucEk~l&w>%WVRjamEiXKmmXtCHLu_k$GekFO6bCb%snpg2{nOysJp&Rc-X_J
+zO{{>f2VsB7C)BmpY}bKYp;<LbOieHls?5I21?8DchanNbYO~4Sf+4{YzX?h(^x8wC
+zZjLt0(dul|9Qgk7cbB)X>|ALfte-y`IJdpAvr#if{z~=lytli!xBSEMqno?S_2FD&
+zI9E?iH&WBpnIm%umhZn)HzykAL`|EJ9K(ZZzjJNg_h_N}>R?}iy=40*===}c%9gVK
+zpD#LwxVW(tV6e+($0yns86+yvp6Ca#^02#_B%UNs*9amWgfY*~LljZV1o}*5$)`{?
+z5{^fpYJ|P*$7}O~<1mr^?3|ddN4%!)GAE#tJ{c#}Nu^ZgVJf0h7;PF^My!1k)F~FZ
+zy+*q%W?}pdF((h|G>e+?;M)CbP%d^-yC43Z9{(*p{%E?E9<Qe_HqsY=x$tYQW-Qc=
+zg@&=v92{xsNI&~GQuV|?Lbc*bQkm6chA{&+W1=F-y7;13q<uDVVs1vv72asos2DfH
+zlx5wnK&hve#RT#ZB2a&W71y~H)!Zn@`4lg#(2^ZJ2w8$8o-&J>0O2u;3W_K?$HvD1
+zXT_zTuqiM_((oTawN#986TMxFe@~HFmA@t$sl~siXsj0hS_u{R0X8w!i}5r(l$bIS
+S_}vzYt05f&t}jvY{Qm-h!l5((
+
+diff --git a/backend/services/__pycache__/storage_service.cpython-312.pyc b/backend/services/__pycache__/storage_service.cpython-312.pyc
+deleted file mode 100644
+index 9a6508686dcbe8fe447c79df1cfda48c5a1fe2f3..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 1684
+zcmZ`(&1)M+6rb5It#>7xSZQPW5#%&>vVj^>DmOH3AhoG`sp1ls6eGNBG?RFx)vlOX
+zIZ<$n0)^BhVE5!4-CKhF2lUuup%)tkVz$mH?IE{-(o0T#v#YgZ;XK%RZ{B-5AHUyw
+z^H(lsAdr)P|K=8Dgr18@DpF$L?kpJVh#-PJRLAoe3tRG}c?q=a$#rF30iQxtPpxb7
+z8rTNWepco)pfjL#ViFzn0LhX8&_+wLaxcX47LH8E_k++0-N5H1m@BhRxcEYB4wK9*
+z3#zmdR<OwKi2@o9i@RTev5vz1*fQGe*+1fCT!ox|A(-GTX*0bVTE<tAC70$bDate)
+zM*WaSI=$`k&<<*r#KcySTCWk8L5fbC(6PaeaD$6A3We9-PJLefo>RulHLrTU5|*ba
+zuZ2OQJk_drbk42Q%f92axXa7eol1@Rqzu_hZiVtP4+G}hq;}6S(P%|O)aOk`?Q|zL
+z2-^(6#|tpD(Vm|D<%j!&?aRB0dT-|L%-ZzEr|p?1%Gq5r+y15tIp`2p0)rT<lVBW;
+z6~T8*ga8MrbSK+L@Sdphz_)O`J1B@FE}$*29E?$#W;cK<b_`rYB4Zc^IHLL9!wVhr
+z^u|v+W^r37G7&p;C>0#>q5c5l=tI4Yz)ko=2sc8pN-U}GDhe~Hud1ikfrgS07wMC@
+zAbMr9Up~^o>eX!D4=`Pp(#*JgUaQUU#>W>PW2ha!5)jwFX=P$qA}uZ^&NTQdQUt1z
+z>IDwr(Ey_ku|s-0j0Wogp`N|ucrNfxEjb1}QUtn@%$!?X&{!y>=!*sH9#iZ?2<749
+zGcXABPdwB+=4g9**Bn~CxN`BqmwQ9+-fwN|BmWqKtLIkEt<9}3{JQYy+S)?ronptB
+zY)|c(!%xl89dmT!qmDVgt&As>^|}O>MMwY}Q}zIiw@@Z6OGowG8&C=q`UFT3<=rQ5
+zl0synY^j?90uZ8YWe)ncg)F_qPJmy$90Eor%HnHiR?YPZ^mCN$b(F&^uFC{c?6}BR
+z6M~Fe%nfPGL%dF;l4iZZBO~ENOj15FDdg|N|9zBjXNm4pG7j+%M9w7`4pE}$_paQ%
+z0!_SXtQc#bJ<X5p<i{ROZs*53`A>d7|7Y=u{@w1ek(Vk`kN<~cRg0Ohl%ybJ9<oSd
+zG;A_Iewum#b_VugXT=~8wzN1s@s6e5I36jbz^9fO8Mb|+3F}bXW&+vd?(hbNi=KNu
+zdH0gC<P*HINb62g!|{s{BNrDQ6IXqV;!`G1gZ>2o*YxNmHUS~gS6m$7rHnCthE6?4
+d<})<%FFM`TWSr|}F`n$|8b0%CSjEX@{|8Y~WGVmv
+
+diff --git a/backend/services/_preprocess_worker.py b/backend/services/_preprocess_worker.py
+index 51546a2..f18ec33 100644
+--- a/backend/services/_preprocess_worker.py
++++ b/backend/services/_preprocess_worker.py
+@@ -156,6 +156,33 @@ def _pseudo_landmarks_from_blobs(blobs, frame_w: int, frame_h: int):
+     return landmarks_out, handedness_out
+ 
+ 
++def _max_video_seconds() -> float:
++    """Limite de duração (s). Vem da env CTA_MAX_VIDEO_SECONDS; 0 = sem limite."""
++    try:
++        return float(os.environ.get("CTA_MAX_VIDEO_SECONDS", "600"))
++    except ValueError:
++        return 600.0
++
++
++def probe_video(video_path: str, out_path: str) -> None:
++    """Lê só os metadados (sem MediaPipe) e grava {fps, total_frames, duration_s}.
++
++    duration_s = None quando o container não informa o nº de frames.
++    """
++    import cv2
++
++    cap = cv2.VideoCapture(video_path)
++    if not cap.isOpened():
++        raise RuntimeError("Nao foi possivel abrir o video (formato/codec nao suportado).")
++    fps    = cap.get(cv2.CAP_PROP_FPS) or 0.0
++    frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0
++    cap.release()
++
++    duration = (frames / fps) if (fps > 0 and frames > 0) else None
++    with open(out_path, "w", encoding="utf-8") as f:
++        json.dump({"fps": fps, "total_frames": int(frames), "duration_s": duration}, f)
++
++
+ def run_worker(video_path: str, out_path: str) -> None:
+     """Processa o vídeo e grava o resultado em out_path (JSON)."""
+     import cv2
+@@ -168,6 +195,7 @@ def run_worker(video_path: str, out_path: str) -> None:
+         raise RuntimeError(f"Nao foi possivel abrir: {video_path}")
+ 
+     fps         = cap.get(cv2.CAP_PROP_FPS) or 30.0
++    max_frames  = int(_max_video_seconds() * fps) if _max_video_seconds() > 0 else None
+     frame_w     = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+     frame_h     = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+     frames      = {}
+@@ -191,6 +219,13 @@ def run_worker(video_path: str, out_path: str) -> None:
+             if not ret:
+                 break
+ 
++            # Guarda extra: vídeos cujo container não informa a duração
++            # só são detectados aqui.
++            if max_frames is not None and frame_index >= max_frames:
++                raise RuntimeError(
++                    f"VIDEO_TOO_LONG: o video passa de {_max_video_seconds():.0f} s."
++                )
++
+             rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+             result = hands.process(rgb)
+ 
+@@ -250,11 +285,15 @@ def run_worker(video_path: str, out_path: str) -> None:
+ 
+ 
+ def main():
+-    if len(sys.argv) < 3:
+-        print(json.dumps({"error": "Uso: worker.py <video> <out.json>"}))
++    args = sys.argv[1:]
++    probe = bool(args) and args[0] == "--probe"
++    if probe:
++        args = args[1:]
++    if len(args) < 2:
++        print(json.dumps({"error": "Uso: worker.py [--probe] <video> <out.json>"}))
+         sys.exit(1)
+     try:
+-        run_worker(sys.argv[1], sys.argv[2])
++        (probe_video if probe else run_worker)(args[0], args[1])
+         print("OK")
+     except Exception as e:
+         print(json.dumps({"error": str(e)}))
+diff --git a/backend/services/preprocess_service.py b/backend/services/preprocess_service.py
+index 0fe258c..8ebf8d6 100644
+--- a/backend/services/preprocess_service.py
++++ b/backend/services/preprocess_service.py
+@@ -33,10 +33,93 @@ import sys
+ import tempfile
+ from pathlib import Path
+ 
++from ..config import settings
++
+ # Flag: True quando rodando dentro de um bundle PyInstaller
+ _IS_FROZEN = getattr(sys, "frozen", False)
+ 
+ 
++class VideoTooLongError(Exception):
++    """Vídeo excede settings.max_video_seconds."""
++
++
++class VideoUnreadableError(Exception):
++    """OpenCV não conseguiu abrir o vídeo."""
++
++
++def _too_long_message(duration_s: float | None = None) -> str:
++    limit_min = settings.max_video_seconds / 60
++    shown = f" (o vídeo tem {duration_s / 60:.1f} min)" if duration_s else ""
++    return f"O vídeo excede o limite de {limit_min:g} minutos{shown}."
++
++
++def _worker_invocation() -> tuple[list[str], dict | None, dict]:
++    """(comando-base, env, kwargs do subprocess) conforme dev ou frozen."""
++    if _IS_FROZEN:
++        _internal = Path(getattr(sys, "_MEIPASS", ""))
++        dist_dir = _internal.parent
++        worker_python = dist_dir / "python_worker" / "python.exe"
++        worker_script = _internal / "worker" / "worker_entry.py"
++        site_packages = dist_dir / "python_worker" / "Lib" / "site-packages"
++        if not worker_python.exists():
++            raise RuntimeError(f"python_worker/python.exe não encontrado em: {worker_python}")
++        if not worker_script.exists():
++            raise RuntimeError(f"worker_entry.py não encontrado em: {worker_script}")
++        env = {
++            **os.environ,
++            "PYTHONPATH": str(site_packages),
++            "PYTHONIOENCODING": "utf-8",
++            "VIRTUAL_ENV": "",
++            "PYTHONHOME": "",
++            "CTA_MAX_VIDEO_SECONDS": str(settings.max_video_seconds),
++        }
++        return [str(worker_python), str(worker_script)], env, {"creationflags": subprocess.CREATE_NO_WINDOW}
++
++    env = {**os.environ, "CTA_MAX_VIDEO_SECONDS": str(settings.max_video_seconds)}
++    return [sys.executable, str(Path(__file__).parent / "_preprocess_worker.py")], env, {}
++
++
++def _worker_output(stdout: str | None, stderr: str | None) -> str:
++    """Junta stdout + stderr do worker.
++
++    O worker escreve o erro real (JSON) no stdout, enquanto o MediaPipe despeja
++    logs no stderr — usar só um dos dois escondia a causa e o marcador
++    VIDEO_TOO_LONG.
++    """
++    parts = [(stdout or "").strip(), (stderr or "").strip()]
++    return "\n".join(p for p in parts if p) or "Sem saída do worker"
++
++
++def probe_video(video_path: str) -> dict:
++    """Lê fps / nº de frames / duração SEM rodar o MediaPipe.
++
++    Levanta VideoTooLongError se passar do limite. Se o container não
++    informa a duração, deixa passar — o worker aborta no meio do processamento.
++    """
++    base, env, kw = _worker_invocation()
++    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
++        tmp_path = tmp.name
++    try:
++        result = subprocess.run(
++            [*base, "--probe", video_path, tmp_path],
++            capture_output=True, env=env, timeout=60, **kw,
++        )
++        if result.returncode != 0:
++            raise VideoUnreadableError(
++                "Não foi possível ler o vídeo (formato ou codec não suportado). "
++                "Use MP4 (H.264)."
++            )
++        with open(tmp_path, "r", encoding="utf-8") as f:
++            info = json.load(f)
++    finally:
++        Path(tmp_path).unlink(missing_ok=True)
++
++    duration = info.get("duration_s")
++    if settings.max_video_seconds > 0 and duration and duration > settings.max_video_seconds:
++        raise VideoTooLongError(_too_long_message(duration))
++    return info
++
++
+ def preprocess_video(video_path: str) -> dict:
+     """
+     Processa o vídeo com MediaPipe e devolve o resultado como dict.
+@@ -87,6 +170,7 @@ def _preprocess_direct(video_path: str) -> dict:
+             # Evitar que o python_worker use o venv errado
+             "VIRTUAL_ENV": "",
+             "PYTHONHOME": "",
++            "CTA_MAX_VIDEO_SECONDS": str(settings.max_video_seconds),
+         }
+         result = subprocess.run(
+             [str(worker_python), str(worker_script), video_path, tmp_path],
+@@ -102,7 +186,9 @@ def _preprocess_direct(video_path: str) -> dict:
+         if stderr: print(f"[preprocess] stderr:\n{stderr}", flush=True)
+ 
+         if result.returncode != 0:
+-            detail = (stderr or stdout or "Sem saída do worker").strip()
++            detail = _worker_output(stdout, stderr)
++            if "VIDEO_TOO_LONG" in detail:
++                raise VideoTooLongError(_too_long_message())
+             raise RuntimeError(f"Falha no pré-processamento (worker):\n{detail}")
+ 
+         tmp_file = Path(tmp_path)
+@@ -130,9 +216,12 @@ def _preprocess_subprocess(video_path: str) -> dict:
+             capture_output=True,
+             text=True,
+             encoding="utf-8",
++            env={**os.environ, "CTA_MAX_VIDEO_SECONDS": str(settings.max_video_seconds)},
+         )
+         if result.returncode != 0:
+-            detail = (result.stderr or result.stdout or "Sem saída do worker").strip()
++            detail = _worker_output(result.stdout, result.stderr)
++            if "VIDEO_TOO_LONG" in detail:
++                raise VideoTooLongError(_too_long_message())
+             raise RuntimeError(
+                 f"Falha no pré-processamento\n"
+                 f"Python: {python_exe}\n"
+diff --git a/backend/services/storage_service.py b/backend/services/storage_service.py
+index 1a98fcb..1a5c885 100644
+--- a/backend/services/storage_service.py
++++ b/backend/services/storage_service.py
+@@ -1,33 +1,38 @@
+ from __future__ import annotations
+ 
+ import json
++import os
++import tempfile
+ from pathlib import Path
+ 
+ from ..models.schemas import Project
++from .user_service import user_dir, user_lock
+ 
+ 
+-def ensure_data_dir(data_dir: str) -> Path:
+-    p = Path(data_dir)
+-    p.mkdir(parents=True, exist_ok=True)
+-    return p
++def project_path(user_id: str) -> Path:
++    return user_dir(user_id) / "project.json"
+ 
+ 
+-def project_path(data_dir: str) -> Path:
+-    return ensure_data_dir(data_dir) / "project.json"
+-
+-
+-def load_project(data_dir: str) -> Project:
+-    path = project_path(data_dir)
+-    if not path.exists():
+-        return Project()
+-
+-    raw = json.loads(path.read_text(encoding="utf-8"))
++def load_project(user_id: str) -> Project:
++    path = project_path(user_id)
++    with user_lock(user_id):
++        if not path.exists():
++            return Project()
++        raw = json.loads(path.read_text(encoding="utf-8"))
+     return Project.model_validate(raw)
+ 
+ 
+-def save_project(data_dir: str, project: Project) -> None:
+-    path = project_path(data_dir)
+-    path.write_text(
+-        json.dumps(project.model_dump(mode="json"), indent=2, ensure_ascii=False),
+-        encoding="utf-8",
+-    )
++def save_project(user_id: str, project: Project) -> None:
++    path = project_path(user_id)
++    payload = json.dumps(project.model_dump(mode="json"), indent=2, ensure_ascii=False)
++    with user_lock(user_id):
++        # Escrita atômica: grava em arquivo temporário e troca — nunca deixa
++        # um project.json pela metade se o processo for interrompido.
++        fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
++        try:
++            with os.fdopen(fd, "w", encoding="utf-8") as f:
++                f.write(payload)
++            os.replace(tmp, path)
++        finally:
++            if os.path.exists(tmp):
++                os.unlink(tmp)
+diff --git a/backend/services/upload_service.py b/backend/services/upload_service.py
+new file mode 100644
+index 0000000..c2581cf
+--- /dev/null
++++ b/backend/services/upload_service.py
+@@ -0,0 +1,52 @@
++"""Recebe uploads em streaming, respeitando o limite de tamanho."""
++from __future__ import annotations
++
++import os
++import tempfile
++from pathlib import Path
++
++from fastapi import HTTPException, UploadFile
++
++from ..config import settings
++
++_CHUNK = 1024 * 1024  # 1 MB
++
++
++def max_video_bytes() -> int:
++    return settings.max_video_mb * 1024 * 1024
++
++
++def too_big_error() -> HTTPException:
++    return HTTPException(
++        status_code=413,
++        detail=f"Arquivo maior que o limite de {settings.max_video_mb} MB.",
++    )
++
++
++async def save_upload_to_temp(file: UploadFile, dest_dir: Path | None = None) -> Path:
++    """Grava o upload em arquivo temporário (sem carregar tudo na RAM).
++
++    Levanta 413 se passar do limite. O chamador é responsável por apagar/mover
++    o arquivo devolvido.
++    """
++    suffix = Path(file.filename or "").suffix or ".mp4"
++    fd, tmp_name = tempfile.mkstemp(suffix=suffix, dir=str(dest_dir) if dest_dir else None)
++    tmp = Path(tmp_name)
++    total = 0
++    limit = max_video_bytes()
++    try:
++        with os.fdopen(fd, "wb") as out:
++            while True:
++                chunk = await file.read(_CHUNK)
++                if not chunk:
++                    break
++                total += len(chunk)
++                if total > limit:
++                    raise too_big_error()
++                out.write(chunk)
++        if total == 0:
++            raise HTTPException(status_code=400, detail="Arquivo vazio.")
++        return tmp
++    except BaseException:
++        tmp.unlink(missing_ok=True)
++        raise
+diff --git a/backend/services/user_service.py b/backend/services/user_service.py
+new file mode 100644
+index 0000000..04f68df
+--- /dev/null
++++ b/backend/services/user_service.py
+@@ -0,0 +1,58 @@
++"""Workspaces por usuário.
++
++Cada usuário é identificado por um ID (UUID gerado pelo navegador, ou um ID
++escolhido por ele). Tudo que é dele fica isolado em:
++
++    <data_dir>/users/u_<id>/project.json
++    <data_dir>/users/u_<id>/videos/
++
++O ID funciona como "chave de acesso": quem souber o ID acessa o workspace.
++Não há autenticação — adequado para rede interna.
++"""
++from __future__ import annotations
++
++import re
++import threading
++from pathlib import Path
++
++from fastapi import HTTPException
++
++from ..config import settings
++
++# 4–64 caracteres, começando com letra/número. Sem barras, pontos ou espaços
++# (evita path traversal).
++_USER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{3,63}$")
++
++
++def normalize_user_id(user_id: str) -> str:
++    """Valida e devolve o ID canônico (minúsculo — NTFS ignora maiúsculas)."""
++    if not _USER_ID_RE.fullmatch(user_id or ""):
++        raise HTTPException(
++            status_code=400,
++            detail="ID de usuário inválido (use 4 a 64 letras, números, '-' ou '_').",
++        )
++    return user_id.lower()
++
++
++def user_dir(user_id: str) -> Path:
++    # Prefixo "u_" evita nomes reservados do Windows (con, nul, com1...).
++    d = Path(settings.data_dir) / settings.users_dirname / f"u_{normalize_user_id(user_id)}"
++    d.mkdir(parents=True, exist_ok=True)
++    return d
++
++
++def user_videos_dir(user_id: str) -> Path:
++    d = user_dir(user_id) / settings.videos_dirname
++    d.mkdir(parents=True, exist_ok=True)
++    return d
++
++
++# Um lock por usuário: evita leitura/escrita simultânea do mesmo project.json
++_locks: dict[str, threading.Lock] = {}
++_locks_guard = threading.Lock()
++
++
++def user_lock(user_id: str) -> threading.Lock:
++    uid = normalize_user_id(user_id)
++    with _locks_guard:
++        return _locks.setdefault(uid, threading.Lock())
+diff --git a/backend/tests/__pycache__/__init__.cpython-312.pyc b/backend/tests/__pycache__/__init__.cpython-312.pyc
+deleted file mode 100644
+index b6ecaab3d2347adc895dc593c5df08222e886e47..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 164
+zcmX@j%ge<81erfqWrFC(AOanHW&w&!XQ*V*Wb|9fP{ah}eFmxd<?L(~6Iz^FR2-9?
+zlVzA(662CuoL!P%5aV2#oRb=onVagEmzYyooLL-`l$e~InwJt&l3H9+91|a(nU`4-
+lAFo$Xd5gm)H$SB`C)KWq6=)_S5Ep|OADI~$8H<>KEC8zjDvbaD
+
+diff --git a/backend/tests/__pycache__/test_analytics_service.cpython-312-pytest-9.0.2.pyc b/backend/tests/__pycache__/test_analytics_service.cpython-312-pytest-9.0.2.pyc
+deleted file mode 100644
+index b1af1e42864978350b211ba59c525f87ddc5f446..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 56232
+zcmeHw3v?XSnPykNRBBmjNjAnde#kG`?T4^rBg@!wY-|VtEFLz72$QC*ZW|fBsA`!=
+zbOS@O6EX27X2Jw<mR(vC?OGnlM47`*U^cT$HrZJ+$<B7GWy{lH_vFlOPQuQf*<eo&
+z184V~{r-Ea?yc%Bb+;b`!cm>pum9fq@2y)^x9<I4_rE`>t`4|x{OW^0>Hfu9m+OB}
+z!aS-uqFnj|#pQa@6?JvGqDs`=qx8Bv-3sBJ9#5y2{rC0yyO7sg(Wx3|DmyE2#@iF<
+zt?H~|dA^=`z15x7y)~URy}{04Z*6C7Z(V0yZ+&Nd@BGgBpxF@hf7#o)!0n1Hh*qGq
+z8m){5qE*p(uT{TV!CS-5)!<ApS{tp4)<@^(om+r2*UeIHA<kTna*G`5T#PeIaP9_s
+zoyUEh*STGvbw!tc*%e*(s++f>b0N!Hj=U8j?|PQkfV`C=ZxPE|g}l`wZ!ybTgS@pO
+zZwbq5MBX})cLU2?kGzn`TRP+kZ5&SA-`5>)h{yD}-f*m6Yl!qkdWPcNU3yrLX(zk8
+zVod`>O@Y9DgMAH8bjKgPInaQkE84JcsH-P-sJl0|mkQ|JIy-SR()C!ZFM6cuWUTMx
+zk%L`Y_dr}fGB8B-Hy9^xWEZ=!Ve`qryYvV`O0Fu>*ViA9#Jl_Z^bVwbx1xMJRFSLe
+z>hB#GjK{*FS-EO6>v*Iu9?u2M<fE}jyf-qCyWY&`KYAk873U?<K1rz$_Vz}!q1<AV
+z@?@lEFcv;K6z+<|W5@e(s@6O;6zPo&5B7F<@t4J6CH_^pT*{>{0C~|BN1x^g`k6cG
+ziF%{Hs6Sfqnrim6q>@lhcuXq!KjC`SD66>QJ~KaB+3iXw<I2~RgRW4ZW7vE5K*L^*
+zy34!E0e;Epe*Kx8=g{86znO>RfggUWzhQs37VC~ja-Q4wH=nJ@RrU|WH1<eyReC(4
+z#ly$6NN+4xiT7imYIM+`P{p15`D4qeT1@XB)VgA4T_I1-8}06j=lp{MQ9L2di%W*w
+zIsao%M6~02PL0NnMFxA~x=w9uX!!8neK#MuAKgbk@>tJ_=C1gW{W1Nqc>lnWf=+Y9
+z>@ciP93d!QwWSB<0=<#PV&NEd3#|cHS&Tou9pD+)JHh!E>K9#DaNULa1sCe@TX-S3
+z4DcU=YOVj7+kai}@>PH3?%%un^lj7L8{Vm^%~UNt-3E~MF1>^bT!VO(u6ts~BU-~i
+z?1yI}@9skSIGw?<M+*XKwFK%2)C1%K_w?)CUFfY5?cGkwt)X0RN5|p4zoDUyy^mY<
+z#|L9tlwQcK&AGtdfru74HmIY>H;KCHbA9?i%&6pbR{l`O-ov>{JglxrAJI)wuFKZ-
+z%<gij73W@b#ax{V22*!b`Le6i6LkZ6qaHwC)C=g3`T#316uLUqXa!*9kQ%DY)gQux
+z-p4<!gZyjg5}g<o(*TL?s$A;y+dKGi(P3GaHij@zizA7)Bs~dt!t>aAmn-Q_c=d0~
+zu6+Xa<sVUZ!g~x80F^oBew8{Gj;J?IpBXz&u!+S?@&B(H$&)VqI!pcZHRK%$#r()L
+zD<!?MyhBp<VY;!@>O|`{Yb`<NG3lbdmp#L{|0Ek6625MQrTlT~SM0FVMBOa!Nchc~
+z%>U2g-G5O@y7A}5GgnS5$SZ>66~7O4?tNVK`&f7l-$&)#`?%`&vB>d#1g>bjs+xNr
+zSNA@KT%ma#1~cPwomD<`x3`Cs;caWz4-B=0^uUt_($L;O*p`sq6bF;o6OM!H4C{ep
+zLpwinQ%KMG!LEP>IqS)JKuVy6z)c_4M09W>aaP545F&FsuF_KMDv^^;*FdS8ij;aH
+zqJvKb&(#GU#nw2+x}8;q+lrLtcP3ai``v}AHJS@^^Q`xu3+&;1bvUBs>cG18^n|t8
+zfJU5aM2qF-;dJ=uV0TZvyARK&rymr0Zc$i&w12QC%1Fb<d-{*!f%Y-JFsw(8#i)i{
+z&0hA*z~9`eY5iJmei)KLZzLX$eQ}@%oH+66xj<Yzrd+k{=5w|AcLR3RtH*kdX~ebU
+zs;FiBwKQ83+pLMLJi#yAYE881#Ga5Cf<s$DHP$i4G1fZ}AL2ZsKD?%o#c3*_+KR&Z
+zG&mn{k#!BJ`fS~r5&wnYbu+<Lnc%9l8cKBmq=TzcU728LMy205BZH>|%&4J}lRTA`
+z=rkkd*;7=Vpce?J*%ccy!G^TDF0~IJ9c)PL%LLcWsPsE$Wbl-L8Fd|9ktnhfoo2*5
+zdy1+P^a24jyW;9haCKVUkkSFt!PO}}6WlPP((jy+!BYZe)D3h+qR2{gni2EtDXLD;
+z3k1~cijA3IV_Mxfu@WF1Y@Aq`32vNG>37b^;3)w!>PEUEQDh}L&4_vS6jdka1p*Rn
+zCEl)$t)-8Mv9*5##?>mf#RVg4vQ~_}HCR!U5=YV<7cA@vRb&e!=>hxeb-NOtgjdw%
+z!&Kp8?65!KKdtD?<0Nvh<Aejl3WnHkFvLC^LrkIwFGcc5-eF^iW&KW!q?I9-ln%^e
+z9z$H5Rxrd-U%cFwF19=ghnC7`Z9YrQTEd~lg(bks`z%*+D3cH@dI>u5MoZB7%+^Nz
+zFZ&sjUjZGInyBdJEWaAR-h6qMnjDyuglg7g{<pCFez5%>#`^m(l~$Tl>C!#gHq?&U
+zYM|tNlRuL-W0K|bE@8&R+iK<kF|xK{E{+TgX#HOdB-hhb+Cq9LkmSR=pHE9?{aPE^
+zq3r;mS$7+ORswA~@4!&=mJfrLsks?5KFe+~C%fu{dk@@m*RA1O58v8x=%BWn>N-Sq
+z`T3Q#&rr@D0(%MELSP?({RD0$a2vqcO6^X<Y3kAL0<g|9H(3+gt%)642hp-wluts<
+z&9>B5orV)O3CW2l$fg)MO%Jb{Z5om^H=`Q;rvPjc8ef*JyU{iYwT&M;(>vCiR@){q
+zH?)oQPVUP#wgJPulx}Rx1lwj*`kgm(cv8TO+D2n2kz^%0&8P(tM^NebF+pmgAWil1
+z+$m~=Kyh`B=Rs66H~8X(o^Tk_<d6z&MDYPt4AV>-QJi*e@Wu0{Bk{2gzO`cT?JG9;
+z3eH)|3D;uiW#glEKc0fdw2}`2Glo;`2<3j301cwr!vxA4K{ZlyJB@bLe6%y}X1HP2
+zvCg2NG2D5i<IHdC_-$tnj2%d;t&?C(TgMJeuFkG$1qOaNy{0u2Y@Jc*cizn5NdYrz
+zD~)tSl9lK*qZULQL8arj2~raUY3cyaouWnv6j$eX9z->TBOPgg8Jqciz>kv6jJlyq
+z^d$WWU&23(@gWIAR}ySSLLG)NAz7L5CMt)aJ52_n-eeVHN&|_i*L<c4C^-*|={&}m
+zRwt^#nD$vlBqzqypQr|7T0x~OjHy~SyJsEouHD$ET3YSI-pR4Cvh0>x*-VF)7P6UF
+z#F$o=X!%FRn3lM%&@`8z6YOaTx+;@>EkQTWq>Bb#4lu^KhRmyp8iR2Tmd!W^&6>>r
+z7RI^SWSsHehd*MZEAXe{uM&R&{8c6AfvK)Gnd;B)(T>rGc@W^2oA)jK`@d^l@|m+r
+z&ZEV8Om_R<6dCbt`Vl$kw=|o)HDP7)+a|-^u(@G9!x^uBBhzpZ8y#xcz;WosLZM9!
+zXkt4xt$BxJ(%B>s3P=uJJ50Ct0D%Vye4YT!AB-u#iNPHNTbhThe0$4Q&bQ+~S5onb
+z=5{K6*%M8uHjh=;!c@;A1R?;O|28y71~+b`w%X2Zv!z;XsqMB@n>E$4rGV*gY2gH1
+z1Zdf&ljJR!egol3sCqUV+TQf=+S#T=8ySf%`c_j7Wk>)&Cp8pT(L6MM@=S6pnN}Z~
+zydU6=E`YZn3jlj--<#b)-d;<o?zh)wcHa#QWV`Rq+;k7n^x;lG6h`WB=k&UVC=Ys{
+zbq{5N56!6bJ8$Ojq<|UqA(~E!BrDNrMlFaqf=b6FsfmI#mE;6d)F^?z0X-O1i`=&$
+zP8jIhYXyp?N_-uicl@E{h10JvUj7-L=#@^t4n|C>mmN-epIMEVl5KaGP+v7_WJXL`
+zzmvI92m=rsB&CBMND3HCY$#4Erp6L=iiv1eBj$YLR$P{voF-#2wKxpSFk)iRRXg4#
+zR|qz&YGmT)qWgBjb`l`_e5i`4#QA9RIm#`UnY{zVg&O4RI4jHS3sMU|yneRtH($g3
+zS*rCZfC3@@lcMunn8%DpMUUF=`nuBPKJMyrKMcKHQi+3-ALPyQn%86(pLd_C^TMDE
+z3gN4g5IqP+G>?;cKk1DNJ*kr+A1tgd=?8NPCf4i|$qKNp6^t=e6Dre~8Xja2svW+L
+zs6U}H#uTM&jHxiKJBi}9uTR$R)N4im$JZw*9n8B@mx!-VEkP^viP1{w1W=--i!F6J
+zv{XK8^I3v1E!yJ35@>m4@iJ1#E<q>WXbHLsv$bISxW=@SF@BW>;}?jN!w)+wH7zmo
+z<o`s#tjYXuFn(Szb;RH?hA&w$gx;>;FR461Y~H)n<+-a5b+5B-jWo0xy<m-uL~JlR
+zs|-JW`8?i7CD@;>$@#QM-|?8%Kn)~iq;_R&*V!t@cIA|C&d)robg3-O<G>hyq#dPe
+zbphx!yIHs)&Is|bl<bjYBJArAGiGP@u{59ZPOAAm0F0&kKlk>^AKjj<JMe?s-+26m
+z4XM~<*ZKOJ-@1LopRPMVHoJw{y7h*-lru{^OlE1v<iWJMV=Os&FuQICFvj)l$OL!H
+zsPsE;=J2F|8FdG7Jw%d~=rp4iL>xh-#OfHNCJIvGdMI~FMI!{7UPpO_KUDL<MW3s_
+zL%Brb>em+B=Jz_=t>(sXJRjRJH-^*Wm>a_}hHFpbNoZ>c&={^gL!g_$HUhs#pq0QO
+z0(LE__AKRn8Nhi+Tg2Ey8mRjEPDaAV27&QWZR2blq66_gRKGE>-FnB{%|CiDTi5Y}
+z2j5aKupOJ!&)4sK>p>dWIvfYKo#w!{lcd0%7})O5uG<NW4Qx9z!JRWI{mz>?JSkvC
+z-AMx*kz^%0&8P(tM^Gt^W(KK=f|Ld}%AHct2!W>8QC{H>)v$r>Zbcixt#^b1IW^3@
+zO~T<^ARO-Pj}G?4fX@quA0LeLkRM7otldlRB1+&mfnfqk0$(BU2Lx#5XObVAakOSi
+z5@^An-U#qz*G0F_x9MVy+qdJQ>h^8FsCs-yl#2m3GJ)QFDd6$#;#E*Vn$5%kxseX#
+z(sICJPPRkdkT18y(gO~YC;2Ty`wTyF+bB+w7}yNu(w~+kmx3#Icex)Wt{mMt=}x#$
+zc&SzP;}6}ZYQd9xlAw$#--7P}c^)v%*_ZI?FIl89!G+5jAhr6Krvb`X_-3y~O?P!t
+ztCer2`)9`qC#h9XmLauDzS;M(n>*2xzkR}QaElf3a-~thcjj@6zNA-hh;DF*YR7JR
+z_}YyG$hm=!Gn)vb(FLqwJ+X$&YR<jVm|_fW^*WeIGK7=md#lYI4f;9lW}Ja6OAgLl
+zmSucrnX+t1mHM)rw>uu|)&7vKWO1-+v6#HM4r`lsH)wR~4JPNt*|r<l7^lVJgIb>+
+zrs2z26wn>hhg)aw<lL>wxg4nx^?wFHV)2I8+Ou^#M*M%fVM{jHe6}&Q=Ct?4>Tgs}
+zG>&-F!RFlcEorr7B%Z#$B@=9!QR#Qi$lxgfGnCC!S&2@oEhsC91Tv+zd~ng@s%_DU
+zy?SB(zWQ0%tBdZ^3L`1{lFxlY+3zx05VH%hPgOVx;fltQ^vG%2Q4sc$JqLoYSBh7#
+z?RXM?_BmH1D#{RqJrIE5yH2GnAGEJ*@zN^ZI*6B2+%G8z3&j9FXrD!BD=IWcE#B~-
+z2tn9iqUB;JDnTc#(k1AGz#OeG1Ywnyt|e4sXsaw+5Uw=)qxs(ugvn)ytQ{l}L-7KI
+zTcE=>Pmw4LnOC{A2gsc+1v6m6^)Ox=^NBM$v-MxpMIBUEPR&m!-&9^y6xXRmUe}QF
+zZO;=*$jydJEb3ws^;vh$-LxgAbQ?>B_{dYa>v*gWzNOmk;m?#BXGo+pmn}8z;$E%0
+zn?wbVpkew_fM2=(=^0nLe%DLKM(ZY&?*z^UCS%$4J6~vi>DULCXz+V>!E)uriscG7
+z>==W1F{{0KRjcdqRSNex4{pba9}U&WDIw>@vx(;d^7>a`SqaFQLi=OfJ)0Iv2=_E8
+znNx(_)7JVDhBsZ#D`Tz%GpN`)A-q#lpP@IEt>2Zc*)`(15Ul_DQ_nq>R=18XJhN<U
+z8ITD$scs!xHlb%%ZUr{-RC?vsOmORrO26|)22Tl?K{lLGi6Se}X(ARh9AQ@yl;aCI
+z3d+<nj!sbv1d3~OJP)FpBIbx=d2F9`E!A;i@RWp`jr35Yf^nnIkR48JUsS<bDJ(Xm
+zGL~`PQ=Hv1XDViHkoD7h&O4+L0pq-+bYKQ0CB}JA30g5HM7;*%#+FJZyvFEeaU8YO
+z<iswD@ic#QOS&<lRdjHf?|Ix7m-)Uy*dGyK99Jd(yvpUX{FblhMXKa30;2>NGexsK
+z|5CU-axc=QzYD9sdKXIQQ2_Q`OtfU{nxNHMd_!8jVdUg!{d0*K^#=UT@gz?On4w&r
+z%1U%vy<xOo&<JEoy@7Soj*wsbDlVv<BJj@%yhPw%6QCQ&7qY%ic?8Hntk(gMkmd1h
+zy$Dfi+a*X=OSwEnG;}}WxIB4kzGXc5yt(|=sDf1~1gQXeW@!VTMUaBnIGZ2^@ydZ`
+zJLZOfwUi53<k$_~%ySYe_?T!#Dpz(madSenLJ9eWTGli=eM^Fy!0N-GsNJFe+rDJk
+z4hK&aX^_B|EGeC?ZWF;^=yMjWt~1+Zsm+O}n@zOx!r-IMJ;`K6{2Dw-n~+-B0d9-F
+zOU80x8NIu^FJuU&<X+O<$NWN=VER~WNXHUx$fV8M3sgjojc#onWso8*G*7D{oH-AY
+z1%{hN<gmG)^7azAg}^=nw-UGwz$%_<-=tjXwpQtMi^fJ%Igl1grEB7}Cj7Y8KRBS%
+z5`A-7I+lq?O#yXixXoeA;Bsk+l8>Q9`Y!-z++8`oIa{{{0_x7a+2Ad2woYz4z2L=V
+z&o4`P&s2|9Pt`WP(Mpo)Em&WkR@aU^m0FMv!e@bg=XjbYvXtPcfGCh!AWoa8I1L1)
+zE(DjS)y9#hQ){p~W=5soIiBW;EG0N9APS_`h|?x2P6L@%8%YgUyHDW)@QT}9a{@44
+zxjbycskD~P3BU>ja``-*hIuh%m7o(0TM4>Pk^uY&dWaB!8_N@bPe6y1e?%2SKwd2b
+z<n<7c-Aq9C$RV4?Z#l}ojB2c6vi1rxhIh?6(mfh&W(HSNPIQotb*d7wx*;7ed~mFB
+z^xlcR-?`)L9dE47Zu-nyd;jwtKe!`(-vinG54`aBSmOse@d?i^Xi{DbHYsN+nk>??
+zHilEV3gfD?2(fbZ_!g+OaRP@3T#o-a{1oq`GOYx@OW-a7VFHg3h!E%?aFhV?p1PCp
+z$_>-`&uKVR_9K0qYJLa6I$OL`zc52jGQ04>Z2f~H6&HdFXM$MSh((Uu#}A)*c<f;y
+zlaN}sk3BrOHM@2@ur$uD-JS_<pHb;|-pt`i0W<3MktcX6E7562Er>Y6E+$CF4|5cx
+zsfRf_MU4<BuFmm1h-!+6uv1{eUqoyacmM(8hZF#l@FB`uO8;Yv80R%h$o~*yDf9<y
+z8&)P6Vx+Vc5J!-ASVrr`miisU*tjTZiiz-sfzZGYr?r=bCCU(Mg(p?<x~1~81f5{S
+zAtrm7eFHvH@NtqMLxgZ(smVc1kRDa${ToU^1<F4oY={(>VZ_)%MhvX(<BI@+$i?@}
+z)tKCirTa40(=-0?tT*40co&|q&DH_mV`4UUgeo~lDOt$9AhmFh`za|{$g>sv(`O$%
+zec@K_v6T-2_fWQVo!*uL_dX`i+MIDs!Lo2o_(@c!|31Jot_uyc27EfWBIVA~Qt41i
+zW6Qx;r!@O=aAb(}+#JDjaFpXXR(J~>3&K-wo{jb3u-po~pbDHhuZCum)&CSN)c%aX
+zy#(?Mq7#%y-~|4JtnT%#yExC|Yr7Osd>go|PBb)Lio^J>l}lTYRm}ET7+`3qBBa_v
+z3*F8`a@n-YG$Y^(R4$F<8!s)qJ1M`g23w2|@|$7-a2!Sp_#aAY!L2}q_t@5CPZYO#
+zVx*!q*%+r_F_l4zJY|dNznujoh&@(zi$0pgI9A(nQU2NTyq)Oe7&!Ng@yW<pmf6SY
+zD`JOJ$R`<jpu{s4JUNs-s<BR;?C95aojMtuXo(FJKL}Cfzy<7gomL+HG1%)$%a<z5
+zSELv}LBm_#kqlU<h1Vw(O9&@ss?lLEeZle!9F$&$BAtR=Sv?>=d3~<@rE8_WYw={E
+z5G>x01SR@hsikUCwg1U`cAxYyQS{yt??cR9@RF`z-)j}~lCCn$ClzHckDE<7OFSWc
+zuYsiZv~udF5K_rIni*4|N&FgdhwxhA+#!%W?hu+qehP?j3VO#TL=Mur5h=pLInp{c
+zBhUmegBI+hSkGphlu;-UVWLSc%wUz}JUy{KCKW={NG>+oYXn{(Kvo{MP$X|Tn?2|R
+z7+kipZ5wW`mu}AC4$uVNDjVzTX!ykwVWem)Z$A*@-Vi&ZiAUB%XeT@ftQ_orB2?kn
+z><6grWMtv1@Hz=&OSx+_;$)aMHs|M0Rr~kI$pz$-DR&)AuEJ;zbi8*`txURR>evI6
+zj1VAsS9_BH@rX7i`zGxNl>Z0;lDe6uKw69K_F~>vgr15F#B7n73=WZV;Z`d0_tV|b
+zrI4iEU<SpQzxc)W=iA{{cuGIro+Sx;=fuL9(9N09&E&FpFde!%yOz5|LcY#(iKLu7
+zA4RxCo`PAIva=EuMDTJv-6~F-DBK`VxAR;OK#~{q9APaHrN$5Dokkh7*}SHSk{f2|
+zW}Z#87BrQgx<F6hkJ?A}y)%E|Y5f~*>3J=w)-$`ub_01?PwmdGXaRP*Exn>8GrwhK
+z9{tW689XImW?st+TX`xgQE_?-rF3!HM5n1PLBkPtX+in2QAiM>qExFmZK9|swVUUH
+z0L>NjR^&a8Yr)DweFT}Ym<+KT@JeL}XI=zOT2fjNJg9}Mfawoh#hn)8mxJB`Tm|`6
+zl3v5kRY+Ybd^+=wSB(s2o|mRNC%Il|9Bf8CC-a}6WO@u)s}rr9!@U+QZSj^awmb=k
+zmO3t!FWQR262$RBC-ljFcA~FXo`=&jmUFnzaPacy`L15AS&-&%TIJ*+A69s-nzMJY
+za8PpoklG!nZ1^k&#F)h}U$O}fGc`X2#5jeyFMob!Q%cUS_iOQ3)EW+oFE*D`^!L#5
+z?GrQD1~xG_V|EgAp7uk~X>SuKSAAr0kmX8an#`;^q&BWM{tL>s>X2F-9Ap<VQ>1)U
+zVSZ;e{jqIAD<J(6E+h2EVpgMt-aG(G`$X%^#$B0>yV7d=_-*NpyRvIA+qI`D{7HKz
+zh*^hz=gl0R6fmQ<lN$(;WF<Pys09&6Sp9;O!k-v*b7V@TmY6k}DAlxam!LqC@`@pe
+zw#|*#c+2)fO7C;yHGeW6`&{?QAFof4KqBNMDJDT6k)nhd1NRCBYqmWCmqs}A&qmfC
+z<NauVP2eX0w&C|jlzTbDul7@va2QDE^MRB%z#K&zEmk=DC~Bko3RRf}un7ji>$t<{
+z_6h%YYR=Y>F>K*PO?D;O+Q?VbW@=*@d3G<dv|;QdqZnD*3>4-wa^$d?%2?fkl6*yN
+zr(tHB@Qc$Xii##`crFOgp1e{>!UkAm<os9A%U>C%yWjQjcevXdunAx+LMimv-pAn9
+zW4N*jp7(@`N1JzmkDXg3#GXl>6%DI|PW_43b?UoJPXbO0Zu1Dd`JsC^1+o?kf_BRV
+zK^|;1qUHIbR#`Zl|A-38Wo~TlRZJM4rqWD=XZEsUZdEJTCum6AZ2uD-E4BN=eb@&h
+z-hDDQ+%nteID46|;_`X|!1ig9#QFjx)}LL!<h19)@|Ee@m8bR5uIGnmYFFZSjwg9S
+zzzpT`R92$XwJS%v1dTwZYF9!~Ty(=M(qa`_#H7Wammw|YFYj@33UylYQ(|ck+nPg0
+z8J0D`I^{$A*dg`yJggfF*oLSWG6DzUVz?95xEN0smx`i378k=$r7TvfijR3Y5Mtq$
+z-2!X$3I{upeD3DAc}4LqN=51r+`=`C)ZsPXd)X~7D8cmdQZD|j`e#{sp3`-Oh8enQ
+zZd<z65j`lH2aA7f$h&@u>H%%F&D@Mno-bx<0wR35@W^N}6DCCXe3M7Gv201jU>>Bw
+zoIJD6Djm$M9`b1a5{0?GlZIHGDut?(`}#AltUF7Lme_JC9HS-9dYDHJD&nL?(}PZK
+zV0;PF{5@msqx=5dzR80x?0aM1>3w7EAL!H(o}GW4V!Kr+OZlyC10rq}I+@wlZ5cOR
+zZ{DzW0R^#8i(V%@(dedgO03WY?ONXK3%H0*8V`Q6p}XGfeWPw-<##rGd&8T(#*Hpq
+zq-f;Fpgl%_?hdo-FmcD0<+ja2bx)YoS8zRr^ke}aZ4X`Tz&V?Gd}ueIs<%YYgIa=g
+z_dfOxnIl`ygI8;sA9hgt4im8JHW(|-^ch=i!SkANA+4A0$D-NS$iGZujKCqnF3VGn
+zM{?op{LiR#2LYzR|1ZF}io*z*x5bt+77AN+AVw5DBl>l#b7X|IRz_mhZf<kXwsH5S
+z(toxO<asn(Ujpve%2d2lJ3ljj4>aHHf83s(zb9L}XT<l;qUEntzf_%8AIOC6`pe#I
+z=q{k+UFpzW*+xRs_Z<cV0aEuJo?i3-QX_-uMGs_x56r0aJ8xw0lz<t^=Bcbi#px;a
+zftSJXQw2C}qSNXFqt$|jBdk4wavU-6s1PX8MvkK{G*9C99hUeaqm?{IKolty8;G4}
+zEYDwKq_Bz&)-`8PfYXqXcQ`olmD;~+HYYx*=5<h!ziM3fBip~rBN;2FkYUnss05vy
+z`n_WRF1s^co%skYH94t%g=@1p;ag&o7TLe6z^Ssl_d%?pW#thR=yUJGd{ONGtj>{g
+zKQ#x&=8C_M{QcDC-iPgNz{RP=_W|avQW!Ie?cXHT?$Ve+Gi@s_sBI@8!$>N_H(rjK
+z4b_16Xev^K&u6v^n@Y4F(xuC^TxdTcV#WpB0c;kJR_i85wprD>wDg-){y}pFwQh36
+zjSh{eTd;-*HipzK*q(<k9Kxz2mSJ5+1U!TFM^KFs5iLbBP^>QkG0&dDYNT5@YK5T2
+z20&a#w>njyR##*7R6X_|no;R@j;DD-zzlM62_nc!bed>+?v#qU1i3&!OczT&mrSdx
+zQf`2eWXg>Von}<}o#Sbq5HN#WT#N{^5}hVmo;yW#337peg3Z4j@N6aph-EqLUs3YE
+z637rZN8s-W+)H2yft3VS5cs|cNP(hLKCQ0xVs-62w{JIvFlxJ~dVQ<Nf%ie>Qo!q5
+z%}Z0kF8qlDZ<>xWqZid$B$v<9j=DCPf~E|{NIVN@WhA67!<@`)Q9*^(8NRwgzu{2E
+zwoxeT>Lb$n?x=~JjnyC>4?CQE`Yo)+VoUuFcI`L`R_rkE3fcsz8+Ed87nC47JG^kq
+zZILyauS1J$mZPFAk(6XFFWzd&{D3Vex24u6;n31+_Ux>?H92@}UdG!L>}}a^v!Dc?
+zrLV-ZlnkP|+mny&_9Rzp%r|?LrKSaDp8S7V6JQ6;K|<!0BCoT%nuAB0DdfU44KgkB
+zBjYpV5wr-g0h}D_9>6K)nPwMbaZTo`hCo)(rx?qH$uX_m*$$3ycM>_9p_u~v5lS8a
+z;Kq6`gYMv-X7m{to@P9L3|D5G5vcn6VquDfMSC&w-2jKT<PUQ8m{o-(Qn-Zv-vLPK
+zT>f%0Teo?{|4y*}bn922OsiX7?!rpp<y(M_Jegj;B@^5-qtfrZk-<{}X4Ea@W=0fQ
+ziHg%x>K5`XGftc6G}R?&IKnP1C|`yIX<V2isAzn%IBlY+2yM(GMH2aik|RlKY{35l
+z20IM+Nb)19kV?uL96F&Kw+!<M?EB0pC=9e16wT5o>7B*l%1808n8P+U$J778@`*T`
+zqWIQ$C}UA*U%TN}e9SP^7awi~Wf{Y*#p$Q);nsS6hv8NZ_a$2@-clKZnOqX!H<q5|
+zZ(UdJU?%nkF$Z5uAZ9-;zd7L~T~RM_%D<9cLi^v$^%8>}{GIJ3i{uz$Vr(pN%D<9c
+z5}4~HpMtT3q^Z1v^%AH2E9oUwbG_tK&`Xx)brB?4FLBDhl3p@zu9tiYddc!xdWlp1
+zmGqM8xnA-q=p_wKy(GTM%ssKj#N>ar0Jc%4O)Oc-w!aa}EtABP1WcI-YO%0I7MWct
+zs-aT9lTuNzY^kV}5=uOOQ|c(Gz$+*LDJf`q-VRDX8K2p<wRmx5)yE^xi9S{0j>Hnw
+zXsuXUS{JQPm`h9Nl^s%D?BQs>0ju0+xaw3U1F+`I@6br!W_onoQ^cwwOghrAGRwB)
+z7D^U#F6WM&3>CyDAw|}3jb;CFD9D&%3)Y=GinW9JBA0H2L5A9xo^BQ|ZZno$$@(N=
+zi5iWF?L#GNl!U19P?0;<;}I<$KBi%7hLV-qXi;ymHyT6uzVd3dP@>LLMcQgQRoNmm
+z!)J&405t=Xt8sZ=kuB{V{DR;Q)MQ?Rt>R@aK;|l5>HWjhq`RnVe~-XVsIyr&%_I*c
+z?Y|*6w19_JWLi^Ftdy%T)kyla#0n#AvPN!H`60GQmx7%+nRfMm(Rrp~{U%||M>tGa
+z2Y^-2x?TGvWs}E{MoLiaZwUMxK(7Wcbg%p$*TC|~TF1I$JyAV8fbJU8PR63cR-b-m
+zT;h7ye7bR}ISQpAw5`=kMw>I$%SPPLyQbWu@oe21w!PEo$a6y@-V4F`+=#e2Rexsb
+z*wVDR8HU8AnIP1j^gGAXJRx8Px!5j%2(l8LCR#zm5!6Q(MT62rL77^bM~NirqV_!b
+z98|*VMvuPI{Svm~TsQLMXm=*KZbqfwIiBVT0W-)&dx#(_(P^R;G#p_S3(C=>90lcQ
+zcOE5@sEgXe?4BD_?lV<mRcUo2Y@bz`;Kmu1e&=|aCj`tO7wsW}tVE}YR?u(+^^p<O
+zpfpiXrmFHNkwjge!1l}pS7d@K(rR<6g)N*`o6`vJv^x`Qo>A#{&dA^?0W)edJtLyX
+zN_3hL3nGrNx&>*fg`*(Fif2}V6{50FVyAxkxu?_WuJOh*o5wZ-nRI`z>bvMoyT&$8
+zR%KUVed4Z>r_-x;WrA1_NWb$&22Tl?K{lQmQDh}LO~itRBkXE|avUxOR0xzQe2m6L
+zIKrC4QPeq!?r2a>q7M=}rS3x0IGzVlw$SE5dVXf}m<w;`WImU&nkCqr1FtKM$|dN8
+z<>a>;-cEZR@0lAY|1DvEPJkw8cy6!>xLntqH&A94hn!W;hDNJ9&Loxo5&+`MEyFm}
+zcq%!1UluET$#dp19C1!zY&INmOcahdqxT6voKikH=ha5`EjR>%{}r02{ci$Jt|}BR
+zStIZY{zPy&x3Br48t}DWTBP{aan}^0>B65lglozcWL-gUxy6>pdpF~;_x444hV*XT
+z=CvX|XfNc8QeG>x4B+y1+KM8w!=r8}4y`+F{gp+)auU%gZXDm3#~Kl$d|!uB;-mPe
+zN*a0uC7A;e-?z$qJx(A0tH#MPcBmFc&XO$<lxP9sjfp_>w9(Bq+QTd9vxP<vbZ8{U
+zYovTJ<xR0Zubr>YgOJ9&?s6)&qKS1OW&svKv{3=#>}}E_mJ={Pe>gnQyXH(hW68@L
+zLu_mJ7&rbSs^>id#FtyS@vYXxO%BUx*TpGBx}*EUU|;v+gRw9V^)tM8*3YMiKZLCc
+z8ZPyJ0YH8c>t9=zt=o=p=^LA~^(|*xQ`=5&dvWJCc22a8RHW-$E-YA;x;s68+lY#Y
+zxTEWB{&!D|t`{D393lU^Cpb#}cLpkm;C*Kn!D$l}r-6WiqMXm)YVPvYJ{RO1FG?P^
+zPnqO6b~pwQ6oFvyDND+QW*PZk&iTx@pg64<c;<HbGIe90l3l*ey4mpBaaQ4qiI>qs
+z3fGO@Q)2kBuZ#=B=PTSB=?_P{wODsN;t<aKKj1Q#$acpUkJa7s(&14h_4t`Dj(u@*
+zcXr+07goM>_ya8kg5&tZv0#rm_{WQ=k@DJs5D8|K1;?mwvnV1X0|Qz=qTZPi;b`HQ
+zyEi&ZpmaHnd<*T&)#kV1@}s7owMI?<5S3aKK95i`LV#31C8DOUX46YvgYsU^aQjug
+z+rLCBL|hzmT6w3sE<>+0TX##g`j!#*&x3U{!Bv<>(rVlIu`|76y+9`S0gUxd?#ni|
+z0ZZd-V_PQJHlxz-yqUw30%p{<5sjy^5}jt$f`}vRVuE!17)L>x>gDJZHA0}cI>+-M
+zswosag?IJb#*?~rqH*$#otu*IjmSgB3Mer_3x~cEbYk(%r({af-p9kz{)vF|Y}8R|
+z#IkHOS;k!SpXf>-5J(X?MqnENOcq+PxyE{xYd6zqY`{N6jkupcCjlddXx>y)W8KU#
+ztY7{_qy1l0?zrE^N<MQ~Z!v$~*m)Ii;fHkHcL1!yh~uom7do|$-*)D}*nza#I*DNZ
+ztz!o!S7+C>0)wU`y{0u2gcCOX&YL+rDPTrzrCEbWvJ#zU)Pjg3sFZ@L8Kfo(($oQ-
+zJ4KBUD6Y=&Jcw!vXAR+^-RLQ;-H@wqKAP={qn@OnZ&{odrvw`jGY1AWp~8Wo#WMOh
+zI5UelCA599jIRH&$0@P2+DZ740?qGQJQJaTDRGCFJ$sa>Peui)G~5g-qk(8uqOx0I
+z@vH-7Z*MFd7EDpfa5JEYAQTydZEuYKJSxb%S)zjM!RR4EW#ARh7Am9I7RM!Ln!8Jk
+zaZg0_c#Kx7bjA8$YA-4F`~;1bQ;i|oY}->9Bjf2J6OZkp770hVDo}{-%P^P2fx;3f
+z11o}PQIVL1X0ee!NO$si0yH;iB+qGY0U#cReU{R0r&DY`yW)5lv&uk^Q{7AuB4xEk
+zGr4oDi&bnsvpu=|*JazE%dVp4I<}&ve@vJD2Y`|@8n<EY8Ak|=F@y-+Gr0iZjcov9
+z?UM`M*fza-4{%sE)2sJnf_r9E`kgm(cv8TOx`!q<BFRd0no$cPj-b+U%vA=diGnnR
+zV4##cMQsu28`}hmhHyL&qCnvsCp7ryVKOMC!M~b0E}E~$|90^(3DMc~_)_)dFu&PU
+zZ!!#nlWUn(&XJT(;UoklQ@s_Z6*HCP?wslr^Fq{b1iOHKKB`)@^5kT~4ogi=bE6pP
+z9mZ$G&0~xCZAKd~GuLk0`I2LDDSbukB#p&g{eyjR2gOqcZIvUi_B168W`ApuG1pS5
+z9C0Z!0UMgOQ!O$w!Mwa7Fjr+MUap^z&CVbPzyowCHsak)*gXIac7<9t+*z(VyrINQ
+zW}&5Z@A`89#fGvA!8-2Fvno|b%k-a0)!EDhNLy9>z{yO2p=uR=WF|0BTBZ+I9?GR<
+z`uT;BZ7$QdbvZH0%o+ZjY=56F!#`sv3Jm`&w@jm*_6GH7>NJK29FN>UCi3BprM`^b
+zf%p(#jjT^oHNOu44}f(ctm&N&Hm0;}a0AeZqX6mPhKZwMQSmt=BX0#S78RqMSnVrt
+zEbFDM<Y>V!)&rv|flnOes1;(xGMjxJ!dLtwTB!X$0tzN!%}YQfKsTHpzT*E-9)Ul{
+zpCx?7>WlNdz8wU%6WFUz{EF4I0bMh@E-OQ9mpE_*I+ROfPj&VY81jU?xdoOd&b$EP
+z-CcG!0D8BWRg_B|n4C*75womLc1MjZEeF}|@A|h(nE9_ZKt(AtzgWv#(#S3-!5&yP
+zwK!3f>9E|L6P;iq;JM>*+?cZ5)xkpDn8zLzkG)hO#lu8Jd<pdvI$k9=avVvnY*;}o
+zOWAG>rB)PBH)My|(vm9*3QFJ&sFx9F<KyWAf?>05_2uB_WnpGZJv;e^jIX-nvnwcp
+zXJ^?K&awB3mF5UF>SMjKvh39gVts`9b`3Q`1^SY5f^3U<N3z^LST)xN>Cs6hqKt89
+zt`D-_X6u7as}8ShR+?835wOba+)nJD<vag)MkFENeu8GD2J?x@|7DK|)pH{PJ+-+J
+z!R4~_=moMTnOLIutRz+}n)Kj&%AJ*J=K3H#wYffcHGL4uyI=?Qx$t-E4SoG_n7E5+
+zy$}?-H=@y!L{8p78nRj9aSk7`tjTn6tTLmUIRrk#>b@qnkwy6EP*^T++{7*ihh6f&
+z3Uuq;eORT~*A>fod%E>_$d@1I>@a$V_5i@}!K-S@P^339JlNY!@x$qcc?(KBsz>>T
+z=>?B!_@1k3%W;b9Xm7}H=T+6n9g4#d!~5P|cc@<T(NjDEkgG6Wf4LgVTwTFS)M`lU
+z5Cq7n=3~uO7|$x_V|SMe<~1o~b$=t5Y8Fi{PwB}wO9|82zXx!1Vz{1ZK_fjqVe7KR
+zzWDGaCj|sI@)T14jH>?vv=O8ZT{YgGt!rk>8oBy2lsc4FLr{MnN(VzTD*ev!G*1Ya
+zLGDSO%1U&aXnF3Gin;{3KtOz9NyE&Nmduitw7TQeaC%A0>-)389Y{<Ccg(2rcaBc;
+zjI2Zj#gw{Z6j~>u$7vItR(GIALBtW%{rY}EYNAAHzamIbE86$UjW68@_1CH4(Hmde
+zmJL#Ty(u%a9#>jH7e<XULgksLP-sEnMJ+N;n<zA5qc;i~j-cw-V4E^1O_W0A*)IqZ
+zR4QWE{+3?UE1O>0gr%r>5Sw1}W`kIPw|UB3;>y>dVxcSDy|GZ$M8z7_DRnd5y>Z$^
+zv5s|glc3=Us(#HYC`}ZUY5N61f=XE@+LBp<SF@cu(U#ZOWP`NH)>Lr2bxW&rbed;i
+zJ1r9x6xaic+C)Wg+C;HQ7HSkk96{Z$uMwmsN~HEH@~Vnh5^FFfS(Sk0gu+j_9YYz)
+z9kkYi^}>#@`VTA&9jP7jj*ol?EurkYEVW?SQDQB3S5z%nf=*f&eMWG>{Jl@hRUZmP
+zL7v*i+`k+a##sUhx)DyFLb0pNI|;!mOR97!j6M{2RL0_)bnQY;e!TBaD$gnnm9E_*
+z$6vN8t(Z#J!_;X)F)BX~7Eb?4-Ulf&=H7?#ARQO+lz1Ot;;ZceSnfCYREI5dc$V}C
+z0w3Na`1&TkHb6vPvAD4!Vg`>mk!N^QhBp_nlN<c1x$1&sg*@Z9GQ7P=`8-z8W@|?<
+z491++5>NR#Jil@oQ*8m2xDKF@wPdFBH>onlOOicZ`wIfh&`vgXN7k}|v6j}w!Qp6s
+zj5gxKa=u8n9vi-Cb{?}xvHwXId>k!h%x0=3Ti0k|Hn)OT3^rwgO=)%O<Vt{auxWB-
+zCb)G*rQbOtgQo<{s9TBiB#Nv=r-6d=q}(Z1PT-R(IckNdnmDP%bBVONa#RBtNsMZl
+zAV}$Vj;DD-zzlM6VIs&%bed>+?iAG}$OQsoTx=$|HWOTnuoV;7bYNpTxOM`&4p8_C
+z{16O-W#mP!plBGlAW={>3<E`s3lQ_{DXK276p|n@Y^lEdtpFBM-&sU}3>@6@xq`4N
+z$|I1YcShD03j1H-Yr9nM^=;yWbUNhD`S}V@%?qN?vRp+Nouw-r&IQ8ZV}tQQEfx-I
+z<V2HGj}CVC#3ATvdnvg%JTOEZt%*x~-Ti${TI>l8A+mFoA}d#6<nhnp5EWc_G}84L
+zqVF{I_D5qq_~5%9jrB%!)_~k9^CX3O>F$bQS1l3-$p{-ZviOI_me!NeocptopOQu{
+z%o-`5wFUwtC~D0FzD{6*!1oFKf&eouv*%=gb~$wy8aCJy+pVp_6T**g6!mM5qA2gV
+zeTw%t^IXd6U(zG}QuQxf>)&^)iu-*Rz<UHPEvZtLy|>)u3yv<EjJ$PU`rzU8(c|gI
+zpZ>MWb-;a}8}@JCLHFN!Yett&-uKom>HF?aM~<fl==5Fgd)evx#OZzP^s)57Qw67&
+zO&)xUpGN7z(>I9IUHO&&y2@YYex~~Ug)5a^@3{cpze}lBmcHi#cz;c`vVpJ-@2^>|
+mtbWf0@cwN|y|V5-7r^^XE0pH<TmbLiuGA=-F1i3%cl!Uo`BeA-
+
+diff --git a/backend/tests/test_users_and_limits.py b/backend/tests/test_users_and_limits.py
+new file mode 100644
+index 0000000..d6ccdf4
+--- /dev/null
++++ b/backend/tests/test_users_and_limits.py
+@@ -0,0 +1,111 @@
++"""Testes: workspaces por usuário, limite de duração (10 min) e de tamanho."""
++from __future__ import annotations
++
++import importlib
++import os
++import sys
++
++import pytest
++
++cv2 = pytest.importorskip("cv2")
++np = pytest.importorskip("numpy")
++from fastapi.testclient import TestClient  # noqa: E402
++
++UID_A = "aaaa1111-0000-4000-8000-000000000001"
++UID_B = "bbbb2222-0000-4000-8000-000000000002"
++
++
++def _make_video(path, seconds: float, fps: int = 10) -> None:
++    w = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (64, 48))
++    frame = np.zeros((48, 64, 3), dtype=np.uint8)
++    for _ in range(int(seconds * fps)):
++        w.write(frame)
++    w.release()
++
++
++@pytest.fixture()
++def client(tmp_path, monkeypatch):
++    monkeypatch.setenv("CTA_DATA_DIR", str(tmp_path / "data"))
++    monkeypatch.setenv("CTA_MAX_VIDEO_SECONDS", "5")     # limite curto p/ teste
++    monkeypatch.setenv("CTA_MAX_VIDEO_MB", "1")
++    for m in [m for m in sys.modules if m == "backend" or m.startswith("backend.")]:
++        del sys.modules[m]
++    main = importlib.import_module("backend.main")
++    return TestClient(main.app)
++
++
++def _project(takt):
++    return {"meta": {"fps": 30, "total_frames": 0, "takt_time": takt}, "events": []}
++
++
++def test_projects_are_isolated_per_user(client):
++    assert client.post(f"/api/users/{UID_A}/projects/import", json=_project(11)).status_code == 200
++    assert client.post(f"/api/users/{UID_B}/projects/import", json=_project(22)).status_code == 200
++    a = client.get(f"/api/users/{UID_A}/projects/current").json()
++    b = client.get(f"/api/users/{UID_B}/projects/current").json()
++    assert a["meta"]["takt_time"] == 11
++    assert b["meta"]["takt_time"] == 22
++
++
++@pytest.mark.parametrize("bad", ["a", "..", "con", "a b c d", "x" * 80, "..%2f..%2fx"])
++def test_invalid_user_id_rejected(client, bad):
++    r = client.get(f"/api/users/{bad}/projects/current")
++    assert r.status_code in (400, 404, 422)
++
++
++def test_user_id_is_case_insensitive(client):
++    client.post(f"/api/users/{UID_A.upper()}/projects/import", json=_project(33))
++    assert client.get(f"/api/users/{UID_A}/projects/current").json()["meta"]["takt_time"] == 33
++
++
++def test_upload_short_video_ok_and_isolated(client, tmp_path):
++    v = tmp_path / "ok.mp4"
++    _make_video(v, seconds=2)
++    with open(v, "rb") as f:
++        r = client.post(f"/api/users/{UID_A}/projects/videos/upload", files={"file": ("ok.mp4", f, "video/mp4")})
++    assert r.status_code == 200, r.text
++    assert r.json()["url"] == f"/api/users/{UID_A}/projects/videos/ok.mp4"
++
++    assert [x["name"] for x in client.get(f"/api/users/{UID_A}/projects/videos").json()] == ["ok.mp4"]
++    assert client.get(f"/api/users/{UID_B}/projects/videos").json() == []
++    assert client.get(f"/api/users/{UID_A}/projects/videos/ok.mp4").status_code == 200
++    assert client.get(f"/api/users/{UID_B}/projects/videos/ok.mp4").status_code == 404
++
++
++def test_upload_too_long_rejected(client, tmp_path):
++    v = tmp_path / "long.mp4"
++    _make_video(v, seconds=8)                      # > 5 s do limite de teste
++    with open(v, "rb") as f:
++        r = client.post(f"/api/users/{UID_A}/projects/videos/upload", files={"file": ("long.mp4", f, "video/mp4")})
++    assert r.status_code == 413
++    assert "limite" in r.json()["detail"]
++    assert client.get(f"/api/users/{UID_A}/projects/videos").json() == []   # nada ficou salvo
++
++
++def test_upload_too_big_rejected(client):
++    r = client.post(
++        f"/api/users/{UID_A}/projects/videos/upload",
++        files={"file": ("big.mp4", b"\0" * (3 * 1024 * 1024), "video/mp4")},
++    )
++    assert r.status_code == 413
++
++
++def test_upload_garbage_rejected(client):
++    r = client.post(
++        f"/api/users/{UID_A}/projects/videos/upload",
++        files={"file": ("x.mp4", b"not a video", "video/mp4")},
++    )
++    assert r.status_code == 422
++
++
++def test_preprocess_too_long_rejected_before_processing(client, tmp_path):
++    v = tmp_path / "long.mp4"
++    _make_video(v, seconds=8)
++    with open(v, "rb") as f:
++        r = client.post(f"/api/users/{UID_A}/preprocess", files={"file": ("long.mp4", f, "video/mp4")})
++    assert r.status_code == 413
++
++
++def test_path_traversal_blocked(client):
++    r = client.get(f"/api/users/{UID_A}/projects/videos/..%2f..%2fproject.json")
++    assert r.status_code in (400, 404)
+diff --git a/backend/worker_entry.py b/backend/worker_entry.py
+index 2a4a76d..e1b2caf 100644
+--- a/backend/worker_entry.py
++++ b/backend/worker_entry.py
+@@ -34,18 +34,26 @@ for _dll_dir in [_worker_mp_python, _worker_cv2, _internal_mp, _internal, _dist_
+ 
+ 
+ def main():
+-    if len(sys.argv) < 3:
+-        print("Uso: python worker_entry.py <video_path> <out_path>", file=sys.stderr)
++    args = sys.argv[1:]
++    probe = bool(args) and args[0] == "--probe"
++    if probe:
++        args = args[1:]
++    if len(args) < 2:
++        print("Uso: python worker_entry.py [--probe] <video_path> <out_path>", file=sys.stderr)
+         sys.exit(1)
+ 
+-    video_path = sys.argv[1]
+-    out_path   = sys.argv[2]
++    video_path = args[0]
++    out_path   = args[1]
+ 
+     print(f"[worker] _internal: {_internal}", flush=True)
+     print(f"[worker] sys.path: {sys.path[:3]}", flush=True)
+ 
+-    from backend.services._preprocess_worker import run_worker
+-    run_worker(video_path, out_path)
++    if probe:
++        from backend.services._preprocess_worker import probe_video
++        probe_video(video_path, out_path)
++    else:
++        from backend.services._preprocess_worker import run_worker
++        run_worker(video_path, out_path)
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/build_log.txt b/build_log.txt
+deleted file mode 100644
+index 323bb0b35edec37458627637053b566262cdc9f9..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 56660
+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
+CMVK!D
+
+diff --git a/cycletime_api.spec b/cycletime_api.spec
+index e866623..da893c2 100644
+--- a/cycletime_api.spec
++++ b/cycletime_api.spec
+@@ -91,6 +91,8 @@ a = Analysis(
+         'backend.api.routers.analytics',
+         'backend.api.routers.preprocess',
+         'backend.services.storage_service',
++        'backend.services.user_service',
++        'backend.services.upload_service',
+         'backend.services.analytics_service',
+         'backend.services.preprocess_service',
+         'backend.services._preprocess_worker',
+diff --git a/data/project.json b/data/project.json
+deleted file mode 100644
+index 4c512e0..0000000
+--- a/data/project.json
++++ /dev/null
+@@ -1,12 +0,0 @@
+-{
+-  "meta": {
+-    "video_path": "C:\\Users\\klj1ct\\Desktop\\CycleTimeAnalysis\\data\\videos\\Separacao.MP4",
+-    "video_filename": "Separacao.MP4",
+-    "fps": 30.469530469530472,
+-    "total_frames": 3117,
+-    "takt_time": 10.0
+-  },
+-  "events": [],
+-  "rois": [],
+-  "timestamp": "2026-10-08T12:58:45.933897"
+-}
+\ No newline at end of file
+diff --git a/deploy/DEPLOY.md b/deploy/DEPLOY.md
+new file mode 100644
+index 0000000..1ecd04c
+--- /dev/null
++++ b/deploy/DEPLOY.md
+@@ -0,0 +1,96 @@
++# Cycle Time Analysis — Guia de Deploy
++
++Mesmo padrão do CAPI (`CT0DEVTEFSRV01`, `10.21.157.22`).
++
++```
++Usuário (browser)
++   │
++   ▼
++https://ct0devtefsrv01.br.bosch.com/CycleTimeAnalysis      ← Frontend (IIS, 443)
++   │  (fetch/XHR com o ID do usuário na URL)
++   ▼
++https://ct0devtefsrv01.br.bosch.com:48001                   ← Backend (cycletime_api.exe)
++   │
++   ▼
++data\users\u_<id>\project.json + videos\                     ← arquivos (sem banco)
++```
++
++> ⚠️ Confirme que a porta **48001** está livre/liberada no firewall (o CAPI usa 48000).
++> Se mudar a porta, ajuste também `frontend/.env.production` e refaça o build.
++
++## 1. Pastas no servidor
++
++| O quê | Caminho |
++|---|---|
++| Frontend | `D:\inetpub\Bosch\AplicationHTTPS\CycleTimeAnalysis\` (conteúdo de `dist\` + `web.config`) |
++| Backend | `D:\inetpub\Bosch\WebCoreAPIHTTPS\CycleTimeAnalysis\` (conteúdo de `dist\cycletime_api\`) |
++| Certificados | `cert.pem` e `key.pem` ao lado do `.exe` (os mesmos do CAPI servem — mesmo host) |
++| Dados | `data\` ao lado do `.exe` (criada automaticamente, **não é sobrescrita** nos deploys) |
++
++## 2. Workspaces por ID
++
++- Cada navegador gera um ID (UUID) no primeiro acesso e o guarda no `localStorage`.
++- Tudo é gravado em `data\users\u_<id>\` — um usuário nunca vê o que é de outro.
++- Para abrir o mesmo workspace em outro PC: **Config → Meu ID → Copiar**, e no outro
++  navegador **Config → Usar outro ID**.
++- Não há senha: quem souber o ID acessa o workspace. Para rede interna é suficiente;
++  para algo mais restrito, o próximo passo seria autenticação (Windows Auth).
++
++## 3. Limites
++
++| Limite | Padrão | Como mudar |
++|---|---|---|
++| Duração do vídeo | **10 min** | `--max-video-seconds 600` + `VITE_MAX_VIDEO_SECONDS` no front |
++| Tamanho do arquivo | 2048 MB | `--max-video-mb 2048` |
++| Pré-processamentos simultâneos | 2 (os outros esperam na fila) | `--max-concurrent-preprocess 2` |
++
++O front recusa vídeos longos antes de enviar; o backend valida de novo (e devolve 413 com a mensagem).
++
++## 4. Build
++
++**Frontend** (PC de desenvolvimento):
++```powershell
++cd frontend
++cat .env.production     # confira VITE_API_BASE_URL e VITE_MAX_VIDEO_SECONDS
++npm install
++npm run build
++# copiar o conteúdo de dist\ + deploy\web.config para a pasta do frontend no servidor
++```
++
++**Backend** (PC de desenvolvimento, venv do backend ativo):
++```powershell
++pyinstaller cycletime_api.spec --noconfirm --clean
++# copiar a pasta dist\cycletime_api\ inteira (exe + _internal + python_worker) para o servidor
++```
++
++## 5. Iniciar o backend
++
++Manual (teste):
++```powershell
++cd D:\inetpub\Bosch\WebCoreAPIHTTPS\CycleTimeAnalysis
++.\cycletime_api.exe --host 0.0.0.0 --port 48001 `
++  --ssl-certfile cert.pem --ssl-keyfile key.pem `
++  --cors-origins https://ct0devtefsrv01.br.bosch.com `
++  --log-file logs\api.log
++```
++
++Como serviço: um `.exe` de console **não** é um serviço Windows nativo (`New-Service`
++direto costuma falhar com erro 1053). Use o **NSSM** (como o `.spec` já prevê) — confirme
++como o `capi_api.exe` roda hoje no servidor e repita o mesmo método.
++
++## 6. Verificação
++
++- `https://ct0devtefsrv01.br.bosch.com:48001/health` → `{"status":"ok"}`
++- `https://ct0devtefsrv01.br.bosch.com/CycleTimeAnalysis` → abre o app
++- Config → deve mostrar **Meu ID** e "Vídeo: máx. 10 min"
++- Carregar um vídeo > 10 min → deve aparecer a mensagem de limite
++
++## 7. Troubleshooting
++
++| Sintoma | Causa provável |
++|---|---|
++| "Failed to fetch" na 1ª vez | Aceitar o certificado em `https://...:48001/health` (uma vez por browser) |
++| "Failed to fetch" sempre | Backend parado, porta bloqueada, ou `--cors-origins` diferente da URL do front |
++| Vídeo recusado (413) | Passou de 10 min ou do limite de MB |
++| Pré-processamento demora | Fila: só N vídeos são processados ao mesmo tempo |
++| Disco enchendo | Vídeos ficam em `data\users\*\videos\` — limpe workspaces antigos periodicamente |
+diff --git a/frontend/.env.production b/frontend/.env.production
+new file mode 100644
+index 0000000..829ba90
+--- /dev/null
++++ b/frontend/.env.production
+@@ -0,0 +1,5 @@
++# Build de produção (npm run build). Não contém segredos — pode ser versionado.
++# URL da API (backend). Porta definida em run.py/serviço; confirme que está livre no servidor.
++VITE_API_BASE_URL=https://ct0devtefsrv01.br.bosch.com:48001
++# Limite de duração do vídeo no frontend (segundos) — mantenha igual ao backend (CTA_MAX_VIDEO_SECONDS)
++VITE_MAX_VIDEO_SECONDS=600
+diff --git a/frontend/README.md b/frontend/README.md
+index 4d0574b..8b9d4e4 100644
+--- a/frontend/README.md
++++ b/frontend/README.md
+@@ -23,7 +23,7 @@ This UI expects the FastAPI backend to be running at:
+ 
+ The app calls:
+ 
+-- `GET /api/projects/current`
+-- `POST /api/projects/import`
+-- `GET /api/projects/export`
+-- `GET /api/analytics/current`
++- `GET /api/users/{id}/projects/current`
++- `POST /api/users/{id}/projects/import`
++- `GET /api/users/{id}/projects/export`
++- `GET /api/users/{id}/analytics/current`
+diff --git a/frontend/src/App.jsx b/frontend/src/App.jsx
+index 89bb0ea..3fe6830 100644
+--- a/frontend/src/App.jsx
++++ b/frontend/src/App.jsx
+@@ -11,7 +11,9 @@ import VideoPlayer, { VideoCanvas } from './components/VideoPlayer'
+ import CameraView from './components/CameraView'
+ import VideoAnalyzer from './components/VideoAnalyzer'
+ import Dashboard from './components/Dashboard'
+-import { apiGet, apiPost } from './lib/api'
++import { apiGet, apiPost, apiUrl, userPath } from './lib/api'
++import { getUserId, setUserId, isValidUserId } from './lib/userId'
++import { MAX_VIDEO_SECONDS, getVideoDuration, tooLongMessage } from './lib/limits'
+ import { useVideoPreprocess } from './lib/useVideoPreprocess'
+ 
+ // ─── Reusable header button style ────────────────────────────────────────────
+@@ -38,18 +40,8 @@ function App() {
+   const filePickerRef = useRef(null)
+   const analyzerRef  = useRef(null)
+ 
+-  // ── Heartbeat: mantém o servidor vivo e encerra ao fechar ─────────────────
+-  useEffect(() => {
+-    const ping = () => fetch('/api/heartbeat', { method: 'POST' }).catch(() => {})
+-    ping()
+-    const interval = setInterval(ping, 5000)
+-    const onUnload = () => navigator.sendBeacon('/api/shutdown')
+-    window.addEventListener('beforeunload', onUnload)
+-    return () => {
+-      clearInterval(interval)
+-      window.removeEventListener('beforeunload', onUnload)
+-    }
+-  }, [])
++  // ID do workspace deste usuário (isola projeto e vídeos no servidor)
++  const [userId] = useState(() => getUserId())
+ 
+   const [project,    setProject]    = useState(null)
+   const [analytics,  setAnalytics]  = useState(null)
+@@ -93,6 +85,7 @@ function App() {
+     cacheRef: preprocessCacheRef,
+     status:   preprocessStatus,
+     progress: preprocessProgress,
++    errorMessage: preprocessErrorMessage,
+   } = useVideoPreprocess({ src: trackingMode === 'tracking' ? videoSrc : '', fps })
+ 
+   // Show a toast when preprocess finishes or fails, then auto-dismiss
+@@ -107,8 +100,8 @@ function App() {
+ 
+   async function refreshAnalytics(p) {
+     try {
+-      await apiPost('/api/projects/import', p)
+-      const a = await apiGet('/api/analytics/current')
++      await apiPost(userPath('/projects/import'), p)
++      const a = await apiGet(userPath('/analytics/current'))
+       setAnalytics(a)
+     } catch { /* non-fatal */ }
+   }
+@@ -169,31 +162,19 @@ function App() {
+ 
+       await refreshAnalytics(parsed)
+ 
+-      // Tenta recarregar o vídeo automaticamente
+-      const videoPath     = parsed.meta?.video_path
++      // Tenta recarregar o vídeo automaticamente (da biblioteca do usuário)
+       const videoFilename = parsed.meta?.video_filename
+-      if (videoPath || videoFilename) {
++      if (videoFilename) {
+         let loaded = false
+-        if (videoPath) {
+-          try {
+-            const testUrl = `/api/projects/video-by-path?path=${encodeURIComponent(videoPath)}`
+-            if ((await fetch(testUrl, { method: 'HEAD' })).ok) {
+-              setVideoSrc(testUrl)
+-              loaded = true
+-            }
+-          } catch { /* fall through */ }
+-        }
+-        if (!loaded && videoFilename) {
+-          try {
+-            const match = (await apiGet('/api/projects/videos')).find(v => v.name === videoFilename)
+-            if (match) {
+-              setVideoSrc(match.url)
+-              loaded = true
+-            }
+-          } catch { /* fall through */ }
+-        }
++        try {
++          const match = (await apiGet(userPath('/projects/videos'))).find(v => v.name === videoFilename)
++          if (match) {
++            setVideoSrc(apiUrl(match.url))
++            loaded = true
++          }
++        } catch { /* fall through */ }
+         if (!loaded) {
+-          setError(`Vídeo "${videoFilename ?? videoPath}" não encontrado.\nCarregue o vídeo manualmente.`)
++          setError(`Vídeo "${videoFilename}" não encontrado.\nCarregue o vídeo manualmente.`)
+         }
+       }
+     } catch (e) {
+@@ -232,9 +213,21 @@ function App() {
+   function persistVideoMeta(blobUrl, file, detectedFps, totalFrames) {
+     const formData = new FormData()
+     formData.append('file', file)
+-    fetch('/api/projects/videos/upload', { method: 'POST', body: formData })
+-      .then((r) => r.ok ? r.json() : null)
++    fetch(apiUrl(userPath('/projects/videos/upload')), { method: 'POST', body: formData })
++      .then(async (r) => {
++        if (r.ok) return r.json()
++        if (r.status === 413 || r.status === 422) {
++          // Servidor recusou (muito longo / grande / ilegível): descarta o vídeo
++          let detail = ''
++          try { detail = (await r.json()).detail } catch { /* sem corpo */ }
++          setVideoSrc('')
++          setError(detail || 'O servidor recusou o vídeo.')
++          return { rejected: true }
++        }
++        return null
++      })
+       .then((result) => {
++        if (result?.rejected) return
+         setProject((prev) => {
+           const base = prev ?? { meta: { fps: detectedFps, total_frames: totalFrames, takt_time: metaTakt }, events: [], rois: [] }
+           const nextProject = {
+@@ -244,7 +237,7 @@ function App() {
+               fps: detectedFps,
+               total_frames: totalFrames,
+               takt_time: base.meta?.takt_time ?? metaTakt,
+-              ...(result ? { video_filename: result.name, video_path: result.absolute_path } : {}),
++              ...(result ? { video_filename: result.name } : {}),
+             },
+           }
+           refreshAnalytics(nextProject)
+@@ -275,6 +268,23 @@ function App() {
+     updateProject(next)
+   }, [project, metaFps, metaTakt]) // eslint-disable-line react-hooks/exhaustive-deps
+ 
++  function copyUserId() {
++    navigator.clipboard?.writeText(userId).catch(() => {})
++  }
++
++  function changeUserId() {
++    const next = window.prompt('Cole o ID do workspace que deseja abrir neste navegador:')
++    if (!next) return
++    const id = next.trim()
++    if (!isValidUserId(id)) {
++      setError('ID inválido: use 4 a 64 letras, números, "-" ou "_".')
++      return
++    }
++    if (unsaved && !window.confirm('Há alterações não salvas. Trocar de ID vai descartá-las. Continuar?')) return
++    setUserId(id)
++    window.location.reload()
++  }
++
+   // ── shared input style (used in settings panel) ──────────────────────────
+   const inputStyle = {
+     padding: '0.25rem 0.4rem',
+@@ -326,9 +336,19 @@ function App() {
+               ref={filePickerRef}
+               type="file"
+               accept="video/*"
+-              onChange={(e) => {
+-                const file = e.target.files?.[0]
++              onChange={async (e) => {
++                const input = e.target
++                const file = input.files?.[0]
+                 if (!file) return
++
++                // Limite de duração (10 min): recusa antes de carregar/enviar
++                const durationS = await getVideoDuration(file)
++                if (durationS != null && durationS > MAX_VIDEO_SECONDS) {
++                  setError(tooLongMessage(durationS))
++                  input.value = ''
++                  return
++                }
++
+                 const url = URL.createObjectURL(file)
+                 setVideoSrc(url)
+                 setLoopRange({ active: false, startFrame: 0, endFrame: 0 })
+@@ -417,6 +437,15 @@ function App() {
+               style={{ width: '5rem', ...inputStyle }}
+             />
+           </label>
++          <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: '#aaa', flexWrap: 'wrap' }}>
++            Meu ID:
++            <code style={{ ...inputStyle, userSelect: 'all' }}>{userId}</code>
++            <button style={{ ...hBtn(), fontSize: '0.75rem' }} onClick={copyUserId}>Copiar</button>
++            <button style={{ ...hBtn(), fontSize: '0.75rem' }} onClick={changeUserId}>Usar outro ID</button>
++          </span>
++          <span style={{ fontSize: '0.75rem', color: '#777' }}>
++            Vídeo: máx. {MAX_VIDEO_SECONDS / 60} min
++          </span>
+           <button style={{ ...hBtn(), fontSize: '0.75rem' }} onClick={() => setShowSettings(false)}><X size={13} strokeWidth={2} /> Fechar</button>
+         </div>
+       )}
+@@ -452,7 +481,7 @@ function App() {
+       )}
+       {preprocessToast === 'error' && (
+         <div style={{ margin: '0 0.75rem 0.2rem', padding: '0.3rem 0.6rem', borderRadius: '0.4rem', background: 'rgba(255,127,14,0.1)', border: '1px solid rgba(255,127,14,0.4)', color: '#ffb347', fontSize: '0.72rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+-          <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}><AlertTriangle size={13} strokeWidth={2} /> Pré-processamento falhou — a usar detecção em tempo real</span>
++          <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}><AlertTriangle size={13} strokeWidth={2} /> {preprocessErrorMessage ? `${preprocessErrorMessage} A usar detecção em tempo real.` : 'Pré-processamento falhou — a usar detecção em tempo real'}</span>
+           <button onClick={() => setPreprocessToast(null)} style={{ background: 'none', border: 'none', color: '#ffb347', cursor: 'pointer', lineHeight: 1, padding: '0 0.2rem', display: 'flex', alignItems: 'center' }}><X size={13} strokeWidth={2} /></button>
+         </div>
+       )}
+diff --git a/frontend/src/components/VideoPlayer.jsx b/frontend/src/components/VideoPlayer.jsx
+index 71fde86..760275b 100644
+--- a/frontend/src/components/VideoPlayer.jsx
++++ b/frontend/src/components/VideoPlayer.jsx
+@@ -1,6 +1,6 @@
+ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+ import { formatTime } from '../lib/time'
+-import { apiGet } from '../lib/api'
++import { apiGet, apiUrl, userPath } from '../lib/api'
+ import '../styles/controls.css'
+ 
+ export function VideoCanvas({ videoRef, src, maxHeight = '60vh' }) {
+@@ -9,6 +9,7 @@ export function VideoCanvas({ videoRef, src, maxHeight = '60vh' }) {
+       <video
+         ref={videoRef}
+         src={src || undefined}
++        crossOrigin="anonymous"
+         style={{ width: '100%', height: '100%', maxHeight, background: '#000', borderRadius: '0.65rem' }}
+         controls
+       />
+@@ -59,7 +60,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
+ 
+   async function refreshLibrary() {
+     try {
+-      const vids = await apiGet('/api/projects/videos')
++      const vids = await apiGet(userPath('/projects/videos'))
+       setLibrary(Array.isArray(vids) ? vids : [])
+     } catch {
+       // ignore; backend may be down while frontend still loads
+@@ -191,7 +192,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
+       if (!file) return
+       const form = new FormData()
+       form.append('file', file)
+-      const res = await fetch('http://127.0.0.1:8000/api/projects/videos/upload', {
++      const res = await fetch(apiUrl(userPath('/projects/videos/upload')), {
+         method: 'POST',
+         body: form,
+       })
+@@ -201,9 +202,9 @@ const VideoPlayer = forwardRef(function VideoPlayer(
+       }
+       const saved = await res.json()
+       if (saved?.url) {
+-        setFileUrl(`http://127.0.0.1:8000${saved.url}`)
++        setFileUrl(apiUrl(saved.url))
+         setFileName(saved.name ?? file.name)
+-        setSelectedLibraryUrl(`http://127.0.0.1:8000${saved.url}`)
++        setSelectedLibraryUrl(apiUrl(saved.url))
+         await refreshLibrary()
+       }
+     }
+@@ -386,7 +387,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
+           >
+             <option value="">— selecionar —</option>
+             {library.map((v) => (
+-              <option key={v.url} value={`http://127.0.0.1:8000${v.url}`}>
++              <option key={v.url} value={apiUrl(v.url)}>
+                 {v.name}
+               </option>
+             ))}
+diff --git a/frontend/src/lib/api.js b/frontend/src/lib/api.js
+index 6b59998..54cd2c7 100644
+--- a/frontend/src/lib/api.js
++++ b/frontend/src/lib/api.js
+@@ -1,3 +1,5 @@
++import { getUserId } from './userId'
++
+ // Dev:  vazio -> usa o proxy do Vite ('/api' -> http://127.0.0.1:8000)
+ // Prod: definido em frontend/.env.production (VITE_API_BASE_URL)
+ export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
+@@ -5,9 +7,32 @@ export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/,
+ /** Monta a URL absoluta da API. Use também para <video src>, fetch direto, etc. */
+ export const apiUrl = (path) => `${API_BASE}${path}`
+ 
++/** Rota escopada ao usuário atual: userPath('/projects/current') -> /api/users/<id>/projects/current */
++export const userPath = (path) => `/api/users/${getUserId()}${path}`
++
++/** Erro de API com status HTTP e a mensagem `detail` devolvida pelo backend. */
++export class ApiError extends Error {
++  constructor(message, status, detail) {
++    super(message)
++    this.name = 'ApiError'
++    this.status = status
++    this.detail = detail
++  }
++}
++
++async function toApiError(method, path, res) {
++  const txt = await res.text()
++  let detail = ''
++  try {
++    const parsed = JSON.parse(txt)
++    if (typeof parsed?.detail === 'string') detail = parsed.detail
++  } catch { /* corpo não-JSON */ }
++  return new ApiError(`${method} ${path} failed: ${res.status} ${txt}`, res.status, detail)
++}
++
+ export async function apiGet(path) {
+   const res = await fetch(apiUrl(path))
+-  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`)
++  if (!res.ok) throw await toApiError('GET', path, res)
+   return res.json()
+ }
+ 
+@@ -17,12 +42,7 @@ export async function apiPost(path, body) {
+     headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify(body),
+   })
+-
+-  if (!res.ok) {
+-    const txt = await res.text()
+-    throw new Error(`POST ${path} failed: ${res.status} ${txt}`)
+-  }
+-
++  if (!res.ok) throw await toApiError('POST', path, res)
+   return res.json()
+ }
+ 
+@@ -35,11 +55,6 @@ export async function apiPostFile(path, file, filename) {
+   form.append('file', file, filename ?? 'video.mp4')
+ 
+   const res = await fetch(apiUrl(path), { method: 'POST', body: form })
+-
+-  if (!res.ok) {
+-    const txt = await res.text()
+-    throw new Error(`POST ${path} failed: ${res.status} ${txt}`)
+-  }
+-
++  if (!res.ok) throw await toApiError('POST', path, res)
+   return res.json()
+-}
+\ No newline at end of file
++}
+diff --git a/frontend/src/lib/limits.js b/frontend/src/lib/limits.js
+new file mode 100644
+index 0000000..4fc4d66
+--- /dev/null
++++ b/frontend/src/lib/limits.js
+@@ -0,0 +1,32 @@
++/** Limite de duração do vídeo (segundos). Padrão: 10 min (igual ao backend). */
++export const MAX_VIDEO_SECONDS = Number(import.meta.env.VITE_MAX_VIDEO_SECONDS ?? 600)
++
++export function tooLongMessage(durationS) {
++  const limitMin = MAX_VIDEO_SECONDS / 60
++  const shown = durationS ? ` (o vídeo tem ${(durationS / 60).toFixed(1)} min)` : ''
++  return `O vídeo excede o limite de ${limitMin} minutos${shown}.\nCorte o vídeo e tente novamente.`
++}
++
++/**
++ * Lê só os metadados do arquivo e devolve a duração em segundos,
++ * ou null se o navegador não conseguir ler (aí o backend valida).
++ */
++export function getVideoDuration(file) {
++  return new Promise((resolve) => {
++    const url = URL.createObjectURL(file)
++    const v = document.createElement('video')
++    let finished = false
++    const done = (d) => {
++      if (finished) return
++      finished = true
++      URL.revokeObjectURL(url)
++      v.removeAttribute('src')
++      resolve(d)
++    }
++    v.preload = 'metadata'
++    v.onloadedmetadata = () => done(Number.isFinite(v.duration) ? v.duration : null)
++    v.onerror = () => done(null)
++    setTimeout(() => done(null), 10000)
++    v.src = url
++  })
++}
+diff --git a/frontend/src/lib/useVideoPreprocess.js b/frontend/src/lib/useVideoPreprocess.js
+index da6feec..1df3b89 100644
+--- a/frontend/src/lib/useVideoPreprocess.js
++++ b/frontend/src/lib/useVideoPreprocess.js
+@@ -13,7 +13,7 @@
+  * poder enviar como multipart ao backend.
+  */
+ import { useEffect, useRef, useState, useCallback } from 'react'
+-import { apiPostFile } from './api'
++import { apiPostFile, userPath } from './api'
+ 
+ /**
+  * @param {{ src: string, fps: number }} opts
+@@ -26,6 +26,7 @@ export function useVideoPreprocess({ src, fps }) {
+ 
+   const [status,   setStatus]   = useState('idle')
+   const [progress, setProgress] = useState(0)
++  const [errorMessage, setErrorMessage] = useState('')
+ 
+   const cancel = useCallback(() => { cancelRef.current = true }, [])
+ 
+@@ -45,6 +46,7 @@ export function useVideoPreprocess({ src, fps }) {
+       cacheRef.current  = new Map()
+       setStatus('uploading')
+       setProgress(0)
++      setErrorMessage('')
+ 
+       try {
+         // 1. Converter blob: URL → Blob real
+@@ -63,7 +65,7 @@ export function useVideoPreprocess({ src, fps }) {
+         const fakeTimer = startFakeProgress(setProgress)
+ 
+         const t0   = performance.now()
+-        const data = await apiPostFile('/api/preprocess', blob, 'video.mp4')
++        const data = await apiPostFile(userPath('/preprocess'), blob, 'video.mp4')
+         const secs = ((performance.now() - t0) / 1000).toFixed(1)
+ 
+         clearInterval(fakeTimer)
+@@ -108,6 +110,8 @@ export function useVideoPreprocess({ src, fps }) {
+         // Extrair a mensagem de detalhe do backend se disponível
+         const detail = err.message ?? String(err)
+         console.error('[preprocess] Detalhe completo:', detail)
++        // 413/422 = vídeo recusado (muito longo/grande/ilegível): mostra a mensagem do servidor
++        setErrorMessage(err?.status === 413 || err?.status === 422 ? (err.detail ?? '') : '')
+         setStatus('error')
+       }
+     }, 100)
+@@ -119,7 +123,7 @@ export function useVideoPreprocess({ src, fps }) {
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [src])
+ 
+-  return { cacheRef, status, progress, cancel }
++  return { cacheRef, status, progress, cancel, errorMessage }
+ }
+ 
+ // ── Fake progress enquanto o backend processa ─────────────────────────────────
+diff --git a/frontend/src/lib/userId.js b/frontend/src/lib/userId.js
+new file mode 100644
+index 0000000..d1cae89
+--- /dev/null
++++ b/frontend/src/lib/userId.js
+@@ -0,0 +1,42 @@
++/**
++ * Identificação do usuário (workspace).
++ *
++ * Cada navegador recebe um ID aleatório (UUID) guardado no localStorage.
++ * Todos os dados no servidor (projeto + vídeos) ficam isolados por esse ID.
++ * Para continuar de outro PC/navegador, use "Usar outro ID" em Config.
++ *
++ * Não há senha: o ID funciona como chave de acesso (adequado a rede interna).
++ */
++const KEY = 'cta_user_id'
++
++// Mesma regra do backend (backend/services/user_service.py)
++const VALID = /^[A-Za-z0-9][A-Za-z0-9_-]{3,63}$/
++export const isValidUserId = (id) => VALID.test(id ?? '')
++
++function generate() {
++  if (globalThis.crypto?.randomUUID) return crypto.randomUUID()
++  const bytes = crypto.getRandomValues(new Uint8Array(16))
++  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
++}
++
++let memoryId = null // fallback se o localStorage estiver bloqueado
++
++export function getUserId() {
++  try {
++    const saved = localStorage.getItem(KEY)
++    if (saved && isValidUserId(saved)) return saved.toLowerCase()
++    const fresh = generate()
++    localStorage.setItem(KEY, fresh)
++    return fresh
++  } catch {
++    return (memoryId ??= generate())
++  }
++}
++
++export function setUserId(id) {
++  if (!isValidUserId(id)) {
++    throw new Error('ID inválido: use 4 a 64 letras, números, "-" ou "_".')
++  }
++  const normalized = id.toLowerCase()
++  try { localStorage.setItem(KEY, normalized) } catch { memoryId = normalized }
++}
+-- 
+2.43.0
+
